@@ -184,7 +184,6 @@ def solveCorePEE_stst(α, A, ε, θ, γu, βVector, γVector, ηVector, XVector,
 	else:
 		print(f"solveCorePEE_stst did not solve - fsolve returns {msg}")
 
-
 #### 3.2. Levels of utility given s_{t-1}:
 def addLevelToUtil(x, ν, par, s_):
 	return x if s_ is None else x+par*np.log(s_/ν)
