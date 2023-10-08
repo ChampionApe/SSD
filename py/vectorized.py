@@ -13,6 +13,9 @@ def pssa(x, l = -1):
 def addLevelToUtil(x, par, ν, s_):
 	return x if s_ is None else x+par*np.log(s_/ν)
 
+def argentinaCalEps(θ, β):
+	return 0.7 * (1-θ) * (β**(5/30)*9.45/14.45+β**(10/30)*12.55/22.55)/2
+
 class infHorizon:
 	def __init__(self, ni = 11, T = 10, **kwargs):
 		""" Fixed namespace """
@@ -222,20 +225,29 @@ class infHorizon:
 		self.sol = self.solveCorePEE(x0 = x0)
 		return self.sol
 
-	def calibrateω(self, τ0, t0, x0=None):
-		sol, _, ier, msg = optimize.fsolve(lambda x: self.updateAndSolve(**{'ω': x}).xs((t0,'τ'))-τ0, noneInit(x0, self.db['ω']), full_output=True)
+	def argentinaCalibrateEqs(self, x, τ0, s0, t0):
+		""" x is a vector with element 0 = ω and element 1 = beta (assumes uniform betas across all household types)"""
+		sol = self.updateAndSolve(**{ 'ω': x[0], 
+									  'β': np.full(self.ni, x[1]), 'βu': x[1],
+									  'epsilon': argentinaCalEps(self.db['θ'], x[1])})
+		return np.hstack([sol.xs((t0,'τ'))-τ0,
+						  sol.xs((t0, 'Θs'))/((1-self.db['α'])*sol.xs((t0,'Θh'))**(1-self.db['α']))-s0])
+
+	def argentinaCalibrate(self, τ0, s0, t0, x0 = None):
+		sol, _, ier, msg = optimize.fsolve(lambda x: self.argentinaCalibrateEqs(x, τ0, s0, t0), noneInit(x0, [self.db['ω'], self.db['β'][0]]), full_output=True)
 		if ier == 1:
-			self.db['ω'] = sol
+			self.db['ω'], self.db['β'] = sol[0], np.full(self.ni, sol[1])
+			self.db['epsilon'] = argentinaCalEps(self.db['θ'], self.db['β'][0])
 			return sol
 		else:
-			print(f"Error in calibrateω: {msg}")
+			print(f"Error in argentinaCalibrate: {msg}")
 
 	## REPORTING FUNCTIONS - MAP TO FULL SYSTEM OF EQUATIONS AND COMPUTE LEVELS IN VARIABLES:
 	def reportAll(self, sol = None):
 		self.unloadCorePEE(sol = noneInit(sol, self.sol))
 		self.reportCoefficients()
 		self.reportLevels()
-		self.reportUtils()		
+		self.reportUtils()
 
 	def unloadCorePEE(self, sol):
 		""" Unload to database as separate pandas symbols; 'sol' is the ouptut from self.solveCorePEE"""
@@ -359,7 +371,7 @@ class infHorizon:
 	# Political support for various households:
 	def aux_util1i(self):
 		""" Indirect utility for young consumers """
-		return self.db['c1i'].apply(np.log)+self.db['c2pi'].apply(np.log)*self.db['β']
+		return self.db['̃c1i'].apply(np.log)+self.db['c2pi'].apply(np.log)*self.db['β']
 
 	def aux_util1u(self):
 		""" Utility for young hand-to-mouth"""
