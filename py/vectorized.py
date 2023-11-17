@@ -1,4 +1,5 @@
 import numpy as np, pandas as pd
+from pyDbs import CombinePds
 from scipy import optimize
 
 def noneInit(x, fallBackValue):
@@ -8,7 +9,7 @@ def pss(x, l =-1):
 	return x.shift(l, fill_value = x.iloc[-1])
 
 def pssa(x, l = -1):
-	return pd.Series(x).shift(-1, fill_value=x[-1]).values
+	return pd.Series(x).shift(l, fill_value=x[-1]).values
 
 def addLevelToUtil(x, par, ν, s_):
 	return x if s_ is None else x+par*np.log(s_/ν)
@@ -261,6 +262,7 @@ class infHorizon:
 		""" Assumes self.reportCoefficients has been run"""
 		self.db['s'] = self.levels_s()
 		[self.db.__setitem__(k, getattr(self,'levels_'+k)(self.db['s'])) for k in ('c1i','c2i','c1u','c2u','̃c1i','c2pi','c2pu','hi','h')];
+		self.db['R'] = self.levels_R(self.db['s'])
 
 	def reportUtils(self):
 		""" Assumes self.reportLevels has been run"""
@@ -332,6 +334,9 @@ class infHorizon:
 	def auxLevel(self, s, par):
 		return self.auxMainState(s).apply(lambda x: np.power(x, par))
 
+	def levels_R(self, s):
+		return self.db['α'] * pd.Series(self.db['A'], index = self.db['t'])*(self.auxMainState(s)/self.db['h'])**(self.db['α']-1)
+
 	def levels_c1i(self, s, Θc1i = None):
 		Θc1i = noneInit(Θc1i, self.db['Θc1i'])
 		return Θc1i.mul(self.auxLevel(s, self.power_s),axis=0)
@@ -389,3 +394,29 @@ class infHorizon:
 		""" Political objective function """
 		return (self.db['ω']*((1-self.db['γu'])*(self.db['util2i']*self.db['γ']).sum(axis=1)+self.db['γu']*self.db['util2u'])
 			+ self.db['ν']*((1-self.db['γu'])*(self.db['util1i']*self.db['γ']).sum(axis=1)+self.db['γu']*self.db['util1u']))
+
+	###################################################################
+	### 				Equivalent Variation Methods				###
+	### This uses the method of a permanent income transfer through-###
+	### out the life-cycle. The methods assume that the two models	###
+	### are already solved with solution stored in datatabases like ###
+	### self.db in the main class.									###
+	###################################################################
+
+	def EV_̃c1i(self, db, transfer):
+		return db['̃c1i'].stack()+2*transfer/(1+pd.Series(db['β'], index = db['i']))
+
+	def EV_c2pi(self, db, transfer):
+		return db['c2pi'].stack()+2*transfer*pss(db['R'])*pd.Series(db['β'], index = db['i'])/(1+pd.Series(db['β'], index = db['i']))
+
+	def EV_c2i(self, db, transfer):
+		return db['c2i'].stack()+transfer
+
+	def EV_c1u(self, db, transfer):
+		return db['c1u']+transfer
+
+	def EV_c2pu(self, db, transfer):
+		return db['c2pu']+transfer * pss(db['R'])
+
+	def EV_c2u(self, db, transfer):
+		return db['c2u']+transfer
