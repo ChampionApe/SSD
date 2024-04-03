@@ -78,7 +78,22 @@ class finiteHorizon:
 				'χ1': .1, 
 				'χ2': .05,
 				'ω': 1,
+				'ωu': 1,
+				'ωη': 0,
 				'ρ': .5} # 1/CRRA parameter
+
+	@property
+	def ω2u(self):
+		return self.db['ω']*self.db['ωu']
+	@property
+	def ω2i(self):
+		return self.db['ω']*(1+self.db['ωη']*(self.aux_Prod-1))
+	@property
+	def ω1u(self):
+		return self.db['ωu']
+	@property
+	def ω1i(self):
+		return 1+self.db['ωη']*(self.aux_Prod-1)
 
 	################ Auxiliary functions:
 
@@ -354,8 +369,8 @@ class finiteHorizon:
 	###### Tax effect on indirect utility
 	def aux_PEE_polObj_t(self, τ, solDict, solDict_t, t):
 		funcOfτ = self.aux_PEE_funcOfτ(τ, solDict, solDict_t, t)
-		return (self.db['ω'] * (self.db['γu']*self.aux_PEE_HtM_old_t(τ, solDict, solDict_t, funcOfτ, t)+(1-self.db['γu'])*np.matmul(self.db['γ'], self.aux_PEE_retirees_t(τ, solDict, solDict_t, funcOfτ, t)))
-				+self.db['ν'][t]* (self.db['γu']*self.aux_PEE_HtM_young_t(solDict, solDict_t, funcOfτ, t)+(1-self.db['γu'])*np.matmul(self.db['γ'], self.aux_PEE_workers_t(solDict, solDict_t, funcOfτ))))
+		return ((self.db['γu']*self.ω2u*self.aux_PEE_HtM_old_t(τ, solDict, solDict_t, funcOfτ, t)+(1-self.db['γu'])*np.matmul(self.ω2i*self.db['γ'], self.aux_PEE_retirees_t(τ, solDict, solDict_t, funcOfτ, t)))
+				+self.db['ν'][t]* (self.ω1u*self.db['γu']*self.aux_PEE_HtM_young_t(solDict, solDict_t, funcOfτ, t)+(1-self.db['γu'])*np.matmul(self.ω1i*self.db['γ'], self.aux_PEE_workers_t(solDict, solDict_t, funcOfτ))))
 
 	def aux_PEE_workers_t(self, solDict, solDict_t, funcOfτ):
 		k = ((1-self.db['α'])/self.db['α'])*(1/(1+self.db['γu']*self.db['epsilon']/(1-self.db['γu'])))*(1-self.db['θ'])*(1+self.db['ξ'])*solDict['Γs']
@@ -392,10 +407,10 @@ class finiteHorizon:
 		return self.db['χ1']*(1-self.db['α'])*self.db['A'][t]*(s/self.db['ν'][t])**(self.db['α'])*h**(1-self.db['α'])
 
 	def aux_c2pu_t(self, sp, hp, τp, t):
-		return self.db['χ2']*(1-self.db['α'])*self.db['A'][t+1]*(sp/self.db['ν'][t+1])**(self.db['α'])*hp**(1-self.db['α'])*(self.db['χ2']/self.db['ν'][t+1]+self.db['epsilon']*self.auxPen(τp, self.db['epsilon']))
+		return (1-self.db['α'])*self.db['A'][t+1]*(sp/self.db['ν'][t+1])**(self.db['α'])*hp**(1-self.db['α'])*(self.db['χ2']/self.db['ν'][t+1]+self.db['epsilon']*self.auxPen(τp, self.db['epsilon']))
 
 	def aux_c2u_t(self,τ, s, h, t):
-		return self.db['χ2']*(1-self.db['α'])*self.db['A'][t]*self.db['ν'][t]*(s/self.db['ν'][t])**(self.db['α'])*h**(1-self.db['α'])*(self.db['χ2']/self.db['ν'][t]+self.db['epsilon']*self.auxPen(τ, self.db['epsilon']))
+		return (1-self.db['α'])*self.db['A'][t]*self.db['ν'][t]*(s/self.db['ν'][t])**(self.db['α'])*h**(1-self.db['α'])*(self.db['χ2']/self.db['ν'][t]+self.db['epsilon']*self.auxPen(τ, self.db['epsilon']))
 
 	################ Terminal period functions:
 	def solve_PEE_T(self, s, x0 = None):
@@ -448,8 +463,8 @@ class finiteHorizon:
 
 	def aux_PEE_polObj_T(self, s, τ, epsilon, θ):
 		Θh = self.aux_Θh_T(τ)
-		return (self.db['ω'] * (self.db['γu']*self.aux_PEE_HtM_old_T(τ, s, epsilon, Θh)+(1-self.db['γu'])*np.matmul(self.db['γ'], self.aux_PEE_retirees_T(τ, s, θ, epsilon, Θh)))
-				+self.db['ν'][-1]* (self.db['γu']*self.aux_PEE_HtM_young_T(τ, s, Θh)+(1-self.db['γu'])*np.matmul(self.db['γ'], self.aux_PEE_workers_T(τ, s, θ, epsilon))))
+		return ((self.ω2u*self.db['γu']*self.aux_PEE_HtM_old_T(τ, s, epsilon, Θh)+(1-self.db['γu'])*np.matmul(self.ω2i*self.db['γ'], self.aux_PEE_retirees_T(τ, s, θ, epsilon, Θh)))
+				+self.db['ν'][-1]* (self.db['γu']*self.ω1u*self.aux_PEE_HtM_young_T(τ, s, Θh)+(1-self.db['γu'])*np.matmul(self.ω1i*self.db['γ'], self.aux_PEE_workers_T(τ, s, θ, epsilon))))
 
 	def aux_PEE_polObj_T_grid(self, s, τ, epsilon, θ):
 		Θh = self.aux_Θh_T(τ)

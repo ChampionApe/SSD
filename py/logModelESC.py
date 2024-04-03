@@ -38,6 +38,19 @@ class infHorizon:
 	def __call__(self, x, name, ns = 'ESC', **kwargs):
 		return self.ns[ns](x, name, **kwargs)
 
+	@property
+	def ω2u(self):
+		return self.db['ω']*self.db['ωu']
+	@property
+	def ω2i(self):
+		return self.db['ω']*(1+self.db['ωη']*(self.aux_Prod-1))
+	@property
+	def ω1u(self):
+		return self.db['ωu']
+	@property
+	def ω1i(self):
+		return 1+self.db['ωη']*(self.aux_Prod-1)
+
 	def get(self, x, name, ns = 'ESC'):
 		return self.ns[ns].get(x, name)
 
@@ -54,11 +67,13 @@ class infHorizon:
 				'X': np.ones(self.ni),
 				'β': np.full(self.ni, .32),
 				'βu': .25, 
-				'ξ' : .1,
+				'ξ' : .25,
 				'γu': .05, 
 				'χ1': .1, 
 				'χ2': .05,
-				'ω': 1}
+				'ω': 1,
+				'ωu': .4,
+				'ωη': .9}
 
 	def initSC(self, sc, name):
 		""" Define relevant epsilon or θ parameters"""
@@ -138,8 +153,8 @@ class infHorizon:
 			return print(f"PEE couldn't identify an equilibrium - fsolve returns {msg}")
 
 	def aux_PEE_polObj(self, τ, epsilon, θ):
-		return (self.db['ω'] * (self.db['γu']*self.aux_PEE_HtM_old(τ, epsilon)+(1-self.db['γu'])*np.matmul(self.db['γ'], self.aux_PEE_retirees(τ, epsilon, θ)))
-				+self.db['ν']* (self.db['γu']*self.aux_PEE_HtM_young(τ)+(1-self.db['γu'])*np.matmul(self.db['γ'], self.aux_PEE_workers(τ))))
+		return (self.db['γu']*self.ω2u*self.aux_PEE_HtM_old(τ, epsilon)+(1-self.db['γu'])*np.matmul(self.ω2i * self.db['γ'], self.aux_PEE_retirees(τ, epsilon, θ))
+				+self.db['ν']*(self.db['γu']*self.ω1u*self.aux_PEE_HtM_young(τ)+(1-self.db['γu'])*np.matmul(self.ω1i * self.db['γ'], self.aux_PEE_workers(τ))))
 
 	def aux_PEE_retirees(self, τ, epsilon, θ):
 		x = (1-self.db['α'])*(1-θ+θ*self.aux_Prod.reshape(self.ni,1))/(1+self.db['γu']*epsilon/(1-self.db['γu']))
@@ -160,6 +175,13 @@ class infHorizon:
 																			+(1-θp)* (x1*self.auxΓβ2-1/(1+self.db['β']).reshape(self.ni,1)))
 
 	################ ESC - endogenous system characteristics
+	def updateSolve_ESC(self, x0 = None, **kwargs):
+		""" Update parameters with dictionary kwargs and resolve """
+		self.db.update(kwargs)
+		self.db.update(self.solve_ESC(τ = self.db['τ'].values if 'τ' in self.db else None, epsilon = self.db['epsilon'].values, θ = self.db['θ'].values))
+		return self.db
+
+
 	def solve_ESC(self, τ = None, epsilon = None, θ = None):
 		""" Given parameters, solve PEE """
 		sol, _, ier, msg = optimize.fsolve(lambda x: self.ESC_eqs(self(x, 'τ'),
@@ -174,55 +196,27 @@ class infHorizon:
 		else:
 			print(f"solve_ESC couldn't identify an equilibrium - fsolve returns {msg}")
 
-	def solve_ESC_bounded(self, τ = None, epsilon = None, θ = None, epsilonMax = 1):
-		""" Given parameters, solve PEE """
-		sol, _, ier, msg = optimize.fsolve(lambda x: self.ESC_eqs_bounded(self(x, 'τ'),
-																  self(x, 'epsilon'),
-																  self(x, 'θ'), epsilonMax = epsilonMax),
-							np.hstack([noneInit(τ, np.full(self.T, .5)),
-									   noneInit(epsilon, np.full(self.T, .1)),
-									   noneInit(θ, np.full(self.T,.5))]), full_output=True)
-		if ier == 1:
-			solDict = self.ns['ESC'].unloadSol(sol)
-			return solDict | self.solve_EE(solDict['τ'].values, solDict['τ[t+1]'].values, solDict['epsilon[t+1]'].values, solDict['θ[t+1]'])
-		else:
-			print(f"solve_ESC_bounded couldn't identify an equilibrium - fsolve returns {msg}")
-
-
 	def ESC_eqs(self, τ, epsilon, θ):
 		return np.hstack([self.aux_PEE_polObj(τ, epsilon, θ),
 						  self.aux_ESC_epsilon(τ, epsilon, θ),
 						  self.aux_ESC_θ(τ, epsilon, θ)])
 
-	def ESC_eqs_bounded(self, τ, epsilon, θ, epsilonMax = 1):
-		return np.hstack([self.aux_PEE_polObj(τ, np.minimum(epsilon, epsilonMax), θ),
-						  self.aux_ESC_epsilon_bounded(τ, np.minimum(epsilon, epsilonMax), θ, epsilonMax = epsilonMax),
-						  self.aux_ESC_θ(τ, np.minimum(epsilon, epsilonMax), θ)])
-
-	def aux_ESC_epsilon_bounded(self, τ, epsilon, θ, epsilonMax = 1):
-		""" Condition for optimal ε: If epsilon = epsilonMax then bounded  """
-		bounded = np.minimum(self.aux_ESC_epsilon(τ, epsilonMax, θ), 0) # if epsilonMax --> ">0", then use 0 (as if criteria fulfilled)
-		unbounded = self.aux_ESC_epsilon(τ, epsilon, θ)
-		unbounded[epsilon == epsilonMax] = bounded[epsilon == epsilonMax]
-		return unbounded
-
 	def aux_ESC_epsilon(self, τ, epsilon, θ):
 		""" Condition for optimal ε """
-		return self.aux_ESC_eps_OU(τ, epsilon)+self.aux_ESC_eps_O(τ, epsilon, θ)
+		return self.ω2u*self.aux_ESC_eps_OU(τ, epsilon)+np.matmul(self.ω2i * self.db['γ'], self.aux_ESC_eps_O(τ, epsilon, θ))
 
 	def aux_ESC_θ(self, τ, epsilon, θ):
 		""" Condition for optimal θ """
-		return np.matmul(self.db['γ'], (self.aux_Prod-1).reshape(self.ni,1) / (self.db['α'] * self.savingsSpread(τ,epsilon,θ)+(1-self.db['α'])*self.auxPen(τ,epsilon)*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ)))
+		return np.matmul(self.ω2i * self.db['γ'], (self.aux_Prod-1).reshape(self.ni,1) / (self.db['α'] * self.savingsSpread(τ,epsilon,θ)+(1-self.db['α'])*self.auxPen(τ,epsilon)*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ)))
 
 	def aux_ESC_eps_OU(self, τ, epsilon):
-		return 1/((1+self.db['γu'] * epsilon/(1-self.db['γu']))*self.db['χ2']/self.db['ν']+epsilon*τ)
+		return 1/(self.db['χ2']/self.db['ν']+epsilon*τ/(1+self.db['γu']*epsilon/(1-self.db['γu'])))
 
 	def aux_ESC_eps_O(self, τ, epsilon, θ):
-		return -np.matmul(self.db['γ'], (1-self.db['α'])*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ)/(self.db['α'] * self.savingsSpread(τ,epsilon,θ)+(1-self.db['α'])*self.auxPen(τ,epsilon)*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ)))
+		return -(1-self.db['α'])*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ)/(self.db['α'] * self.savingsSpread(τ,epsilon,θ)+(1-self.db['α'])*self.auxPen(τ,epsilon)*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ))
 
 
 	################ Reporting functions:
-
 	def reportAll(self, s_= None):
 		""" Based on the PEE solution, report host of other relevant variables"""
 		self.reportCoefficients()
@@ -358,8 +352,8 @@ class infHorizon:
 
 	def aux_utilPol(self, db, Δy = 0, Δy2 = 0, Δyu = 0, Δyu2 = 0, Δo = 0, Δou = 0):
 		""" Political objective function """
-		return (db['ω']*( ((1-db['γu'])*self.aux_util2i(db, Δo)*db['γ']).sum(axis=1)+db['γu']*self.aux_util2u(db, Δou)) 
-			+   db['ν']*( ((1-db['γu'])*self.aux_util1i(db, Δy, Δy2)*db['γ']).sum(axis=1) +db['γu']*self.aux_util1u(db, Δyu, Δyu2))
+		return ((self.aux_util2i(db, Δo)*self.ω2i).sum(axis=1)+self.ω2u*self.aux_util2u(db, Δou)
+			+   db['ν']*( (self.aux_util1i(db, Δy, Δy2)*self.ω1i).sum(axis=1) +self.ω1u*self.aux_util1u(db, Δyu, Δyu2))
 			)
 	################ EV methods:
 	def EV_solInPercentages(self, db, sol):
@@ -421,6 +415,39 @@ class infHorizon:
 		return self.aux_util2u(db, Δ = transfer)
 
 	################ Calibration, Argentina:
+	def argentinaCalibrate_preReformEqs(self, x, τ0, s0, θ0, t0):
+		""" Calibrate model to reflect choice of τ, s, θ, epsilon"""
+		self.db['ω'] = x[0]
+		self.db['ωu'] = x[1]
+		self.db['ωη'] = x[2]
+		self.db['β'], self.db['βu'] = np.full(self.ni, x[3]), x[3]
+		sol = self.solve_ESC()
+		return np.hstack([sol['τ'].xs(t0)-τ0,
+						  sol['θ'].xs(t0)-θ0,
+						  sol['epsilon'].xs(t0)-argentinaCalEps(θ0, x[3]),
+						  self.savingsRate(sol['Θs'].xs(t0), sol['Θh'].xs(t0))-s0])
+
+	def argentinaCalibrate_preReform(self, τ0, s0, θ0, t0, x0 = None):
+		sol, _, ier, msg = optimize.fsolve(lambda x: self.argentinaCalibrate_preReformEqs(x, τ0, s0, θ0, t0), noneInit(x0, [self.db['ω'], self.db['ωu'], self.db['ωη'], self.db['β'][0]]), full_output = True)
+		assert ier == 1, f"""Error in argentinaCalibrate_preReform. fsolve returns: "{msg}" """
+		self.db['ω'], self.db['ωu'], self.db['ωη'], self.db['β'], self.db['βu'] = sol[0], sol[1], sol[2], np.full(self.ni, sol[3]), sol[3]
+		return sol
+
+	def argentinaCalibrate_postReformEqs(self, x, θ, epsilon, t0):
+		""" Ensuret that the model replicates x, θ, epsilon"""
+		self.db['ωu'] = x[0]
+		self.db['ωη'] = x[1]
+		sol = self.solve_ESC()
+		return np.hstack([sol['θ'].xs(t0)-θ,
+						  sol['epsilon'].xs(t0)-epsilon])
+
+	def argentinaCalibrate_postReform(self, θ, epsilon, t0, x0 = None):
+		sol, _, ier, msg = optimize.fsolve(lambda x: self.argentinaCalibrate_postReformEqs(x, θ, epsilon, t0), noneInit(x0, [self.db['ωu'], self.db['ωη']]), full_output = True)
+		assert ier == 1, f"""Error in argentinaCalibrate_postReform. fsolve returns: "{msg}" """
+		self.db['ωu'], self.db['ωη'] = sol[0], sol[1]
+		return sol
+
+
 	def argentinaCalibrateEqs(self, x, τ0, s0, t0):
 		self.db['ω'] = x[0]
 		self.db['β'], self.db['βu'] = np.full(self.ni, x[1]), x[1]
@@ -437,6 +464,4 @@ class infHorizon:
 			return sol
 		else:
 			print(f"Error in argentinaCalibrate: {msg}")
-
-
 
