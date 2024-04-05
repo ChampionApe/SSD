@@ -12,7 +12,7 @@ def argentinaCalEps(θ, β):
 	return 0.7 * (1-θ) * (β**(5/30)*9.45/14.45+β**(10/30)*12.55/22.55)/2
 
 class infHorizon:
-	def __init__(self, ni = 11, T = 10, epsilon = 0.1, θ = 0.5, **kwargs):
+	def __init__(self, ni = 11, T = 10, eps = 0.1, θ = 0.5, **kwargs):
 		""" Fixed namespace """
 		self.ni = ni
 		self.T = T
@@ -22,18 +22,18 @@ class infHorizon:
 		self.db['i'] = pd.Index(range(self.ni), name = 'i')
 		self.ns = {}
 		self.addNamespaces()
-		self.db.update(self.initSC(epsilon, 'epsilon'))
+		self.db.update(self.initSC(eps, 'eps'))
 		self.db.update(self.initSC(θ, 'θ'))
 
 	def addNamespaces(self):
-		self.ns['ESC'] = sm(symbols = {k: self.db['t'] for k in ['epsilon','θ','τ']})
+		self.ns['ESC'] = sm(symbols = {k: self.db['t'] for k in ['eps','θ','τ']})
 		self.ns['PEE'] = sm(symbols = {k: self.db['t'] for k in ['τ']})
 		self.ns['EV'] = sm(symbols = {f'transfer_{k}':  pd.MultiIndex.from_product([self.db['t'], self.db['i']]) for k in ('Y','O')}
 									|{f'transfer_{k}U': self.db['t'] for k in ('Y','O')}
 									|{'transfer_Pol': self.db['t']})
 		[ns.compile() for ns in self.ns.values()];
 		self.ns['PEE'].addShiftedSym('τ[t+1]','τ', -1, opt = {'useLoc':'nn'})
-		[self.ns['ESC'].addShiftedSym(f'{k}[t+1]',f'{k}', -1, opt = {'useLoc':'nn'}) for k in ['epsilon','θ','τ']];
+		[self.ns['ESC'].addShiftedSym(f'{k}[t+1]',f'{k}', -1, opt = {'useLoc':'nn'}) for k in ['eps','θ','τ']];
 
 	def __call__(self, x, name, ns = 'ESC', **kwargs):
 		return self.ns[ns](x, name, **kwargs)
@@ -76,7 +76,7 @@ class infHorizon:
 				'ωη': .9}
 
 	def initSC(self, sc, name):
-		""" Define relevant epsilon or θ parameters"""
+		""" Define relevant eps or θ parameters"""
 		sc = pd.Series(sc, index = self.db['t'], name = name) if not pyDbs.is_iterable(sc) else sc
 		return {name: sc, f'{name}[t+1]': self.leadSym(sc)}
 
@@ -103,28 +103,28 @@ class infHorizon:
 	def auxΓβ2(self):
 		return sum( self.db['γ'] / (1+self.db['β']))
 
-	def auxPen(self, τp, epsilonp):
-		return τp/(1+self.db['γu']*epsilonp/(1-self.db['γu']))
+	def auxPen(self, τp, epsp):
+		return τp/(1+self.db['γu']*epsp/(1-self.db['γu']))
 
-	def aux_Γs(self, τp, epsilonp, θp):
-		return (1/(1+self.db['ξ'])) * self.auxΓβ1 / (1+((1-self.db['α'])/self.db['α'])*self.auxPen(τp, epsilonp)*(θp +(1-θp)*self.auxΓβ2))
+	def aux_Γs(self, τp, epsp, θp):
+		return (1/(1+self.db['ξ'])) * self.auxΓβ1 / (1+((1-self.db['α'])/self.db['α'])*self.auxPen(τp, epsp)*(θp +(1-θp)*self.auxΓβ2))
 
 	def savingsRate(self, Θs, Θh):
 		return Θs/((1-self.db['α'])*(Θh**(1-self.db['α'])))
 
 	################ EE:
-	def solve_EE(self, τ, τp, epsilonp, θp):
-		Υ = self.EE_Υ(τ, τp, epsilonp, θp)
+	def solve_EE(self, τ, τp, epsp, θp):
+		Υ = self.EE_Υ(τ, τp, epsp, θp)
 		return {'Υ':  pd.Series(Υ, index = self.db['t'], name = ' Υ'),
-				'Θs': pd.Series(self.EE_Θs(Υ = Υ, τp = τp, epsilonp = epsilonp, θp = θp), index = self.db['t'], name = 'Θs'),
+				'Θs': pd.Series(self.EE_Θs(Υ = Υ, τp = τp, epsp = epsp, θp = θp), index = self.db['t'], name = 'Θs'),
 				'Θh': pd.Series(self.EE_Θh(Υ = Υ), index = self.db['t'], name = 'Θh')}
 
-	def EE_Υ(self, τ, τp, epsilonp, θp):
-		return np.power((1-self.db['α'])*(1-τ)*self.db['A'] / (1-((1-self.db['α'])/self.db['α'])*θp*self.auxPen(τp, epsilonp)*self.aux_Γs(τp, epsilonp, θp)), 
+	def EE_Υ(self, τ, τp, epsp, θp):
+		return np.power((1-self.db['α'])*(1-τ)*self.db['A'] / (1-((1-self.db['α'])/self.db['α'])*θp*self.auxPen(τp, epsp)*self.aux_Γs(τp, epsp, θp)), 
 							(1+self.db['ξ'])/(1+self.db['α']*self.db['ξ']))
 
-	def EE_Θs(self, Υ = None, τp = None, epsilonp = None, θp = None):
-		return Υ * self.aux_Γs(τp, epsilonp, θp)
+	def EE_Θs(self, Υ = None, τp = None, epsp = None, θp = None):
+		return Υ * self.aux_Γs(τp, epsp, θp)
 
 	def EE_Θh(self, Υ = None):
 		return np.power(Υ, self.db['ξ']/(1+self.db['ξ']))
@@ -136,32 +136,32 @@ class infHorizon:
 		self.db.update(self.solve_PEE(τ0 = self.db['τ'].values if 'τ' in self.db else None))
 		return self.db
 
-	def solve_PEE(self, τ0 = None, epsilon = None, θ = None):
-		epsilon, θ = noneInit(epsilon, self.db['epsilon'].values), noneInit(θ, self.db['θ'].values)
-		τ  = self.PEE_τ(τ0 = τ0, epsilon = epsilon, θ = θ)
+	def solve_PEE(self, τ0 = None, eps = None, θ = None):
+		eps, θ = noneInit(eps, self.db['eps'].values), noneInit(θ, self.db['θ'].values)
+		τ  = self.PEE_τ(τ0 = τ0, eps = eps, θ = θ)
 		τp = self.leadSym(τ)
 		return {'τ': pd.Series(τ, index = self.db['t'], name = 'τ'), 
-				'τ[t+1]': pd.Series(τp, index = self.db['t'], name = 'τ[t+1]')} | self.solve_EE(τ, τp, self.leadSym(epsilon), self.leadSym(θ))
+				'τ[t+1]': pd.Series(τp, index = self.db['t'], name = 'τ[t+1]')} | self.solve_EE(τ, τp, self.leadSym(eps), self.leadSym(θ))
 
-	def PEE_τ(self, τ0 = None, epsilon = None, θ = None):
-		epsilon, θ = noneInit(epsilon, self.db['epsilon'].values), noneInit(θ, self.db['θ'].values)
-		sol, _, ier, msg = optimize.fsolve(lambda x: self.aux_PEE_polObj(x, epsilon, θ),
+	def PEE_τ(self, τ0 = None, eps = None, θ = None):
+		eps, θ = noneInit(eps, self.db['eps'].values), noneInit(θ, self.db['θ'].values)
+		sol, _, ier, msg = optimize.fsolve(lambda x: self.aux_PEE_polObj(x, eps, θ),
 			noneInit(τ0, [0.5]*self.ns['PEE'].len), full_output=True)
 		if ier == 1:
 			return sol
 		else:
 			return print(f"PEE couldn't identify an equilibrium - fsolve returns {msg}")
 
-	def aux_PEE_polObj(self, τ, epsilon, θ):
-		return (self.db['γu']*self.ω2u*self.aux_PEE_HtM_old(τ, epsilon)+(1-self.db['γu'])*np.matmul(self.ω2i * self.db['γ'], self.aux_PEE_retirees(τ, epsilon, θ))
+	def aux_PEE_polObj(self, τ, eps, θ):
+		return (self.db['γu']*self.ω2u*self.aux_PEE_HtM_old(τ, eps)+(1-self.db['γu'])*np.matmul(self.ω2i * self.db['γ'], self.aux_PEE_retirees(τ, eps, θ))
 				+self.db['ν']*(self.db['γu']*self.ω1u*self.aux_PEE_HtM_young(τ)+(1-self.db['γu'])*np.matmul(self.ω1i * self.db['γ'], self.aux_PEE_workers(τ))))
 
-	def aux_PEE_retirees(self, τ, epsilon, θ):
-		x = (1-self.db['α'])*(1-θ+θ*self.aux_Prod.reshape(self.ni,1))/(1+self.db['γu']*epsilon/(1-self.db['γu']))
-		return -(1-self.db['α'])*self.db['ξ']/((1+self.db['α']*self.db['ξ'])*(1-τ))+x / (self.db['α']*self.savingsSpread(τ, epsilon, θ)+x*τ)
+	def aux_PEE_retirees(self, τ, eps, θ):
+		x = (1-self.db['α'])*(1-θ+θ*self.aux_Prod.reshape(self.ni,1))/(1+self.db['γu']*eps/(1-self.db['γu']))
+		return -(1-self.db['α'])*self.db['ξ']/((1+self.db['α']*self.db['ξ'])*(1-τ))+x / (self.db['α']*self.savingsSpread(τ, eps, θ)+x*τ)
 
-	def aux_PEE_HtM_old(self, τ, epsilon):
-		return -(1-self.db['α'])*self.db['ξ']/((1+self.db['α']*self.db['ξ'])*(1-τ))+epsilon/((1+self.db['γu']*epsilon/(1-self.db['γu']))*self.db['χ2']/self.db['ν']+epsilon*τ)
+	def aux_PEE_HtM_old(self, τ, eps):
+		return -(1-self.db['α'])*self.db['ξ']/((1+self.db['α']*self.db['ξ'])*(1-τ))+eps/((1+self.db['γu']*eps/(1-self.db['γu']))*self.db['χ2']/self.db['ν']+eps*τ)
 
 	def aux_PEE_HtM_young(self, τ):
 		return -((1-self.db['α'])*self.db['ξ']/(1+self.db['α']*self.db['ξ'])+self.db['βu']*self.db['α']*((1+self.db['ξ'])/(1+self.db['α']*self.db['ξ']))**2)/(1-τ)
@@ -169,51 +169,51 @@ class infHorizon:
 	def aux_PEE_workers(self, τ):
 		return -(((1+self.db['ξ'])/(1+self.db['α']*self.db['ξ']))*(1+self.db['β']*self.db['α']*(1+self.db['ξ'])/(1+self.db['α']*self.db['ξ']))).reshape(self.ni,1) / (1-τ)
 
-	def savingsSpread(self, τp, epsilonp, θp):
+	def savingsSpread(self, τp, epsp, θp):
 		x1 = ((self.db['β'] * np.power(self.db['η'], 1+self.db['ξ'])/(np.power(self.db['X'], self.db['ξ'])*(1+self.db['β']))) / self.auxΓβ1).reshape(self.ni,1)
-		return x1+((1-self.db['α'])/self.db['α'])*self.auxPen(τp, epsilonp) * (θp   * (x1-self.aux_Prod.reshape(self.ni,1)) 
+		return x1+((1-self.db['α'])/self.db['α'])*self.auxPen(τp, epsp) * (θp   * (x1-self.aux_Prod.reshape(self.ni,1)) 
 																			+(1-θp)* (x1*self.auxΓβ2-1/(1+self.db['β']).reshape(self.ni,1)))
 
 	################ ESC - endogenous system characteristics
 	def updateSolve_ESC(self, x0 = None, **kwargs):
 		""" Update parameters with dictionary kwargs and resolve """
 		self.db.update(kwargs)
-		self.db.update(self.solve_ESC(τ = self.db['τ'].values if 'τ' in self.db else None, epsilon = self.db['epsilon'].values, θ = self.db['θ'].values))
+		self.db.update(self.solve_ESC(τ = self.db['τ'].values if 'τ' in self.db else None, eps = self.db['eps'].values, θ = self.db['θ'].values))
 		return self.db
 
 
-	def solve_ESC(self, τ = None, epsilon = None, θ = None):
+	def solve_ESC(self, τ = None, eps = None, θ = None):
 		""" Given parameters, solve PEE """
 		sol, _, ier, msg = optimize.fsolve(lambda x: self.ESC_eqs(self(x, 'τ'),
-																  self(x, 'epsilon'),
+																  self(x, 'eps'),
 																  self(x, 'θ')),
 							np.hstack([noneInit(τ, np.full(self.T, .5)),
-									   noneInit(epsilon, np.full(self.T, .1)),
+									   noneInit(eps, np.full(self.T, .1)),
 									   noneInit(θ, np.full(self.T,.5))]), full_output=True)
 		if ier == 1:
 			solDict = self.ns['ESC'].unloadSol(sol)
-			return solDict | self.solve_EE(solDict['τ'].values, solDict['τ[t+1]'].values, solDict['epsilon[t+1]'].values, solDict['θ[t+1]'])
+			return solDict | self.solve_EE(solDict['τ'].values, solDict['τ[t+1]'].values, solDict['eps[t+1]'].values, solDict['θ[t+1]'])
 		else:
 			print(f"solve_ESC couldn't identify an equilibrium - fsolve returns {msg}")
 
-	def ESC_eqs(self, τ, epsilon, θ):
-		return np.hstack([self.aux_PEE_polObj(τ, epsilon, θ),
-						  self.aux_ESC_epsilon(τ, epsilon, θ),
-						  self.aux_ESC_θ(τ, epsilon, θ)])
+	def ESC_eqs(self, τ, eps, θ):
+		return np.hstack([self.aux_PEE_polObj(τ, eps, θ),
+						  self.aux_ESC_eps(τ, eps, θ),
+						  self.aux_ESC_θ(τ, eps, θ)])
 
-	def aux_ESC_epsilon(self, τ, epsilon, θ):
+	def aux_ESC_eps(self, τ, eps, θ):
 		""" Condition for optimal ε """
-		return self.ω2u*self.aux_ESC_eps_OU(τ, epsilon)+np.matmul(self.ω2i * self.db['γ'], self.aux_ESC_eps_O(τ, epsilon, θ))
+		return self.ω2u*self.aux_ESC_eps_OU(τ, eps)+np.matmul(self.ω2i * self.db['γ'], self.aux_ESC_eps_O(τ, eps, θ))
 
-	def aux_ESC_θ(self, τ, epsilon, θ):
+	def aux_ESC_θ(self, τ, eps, θ):
 		""" Condition for optimal θ """
-		return np.matmul(self.ω2i * self.db['γ'], (self.aux_Prod-1).reshape(self.ni,1) / (self.db['α'] * self.savingsSpread(τ,epsilon,θ)+(1-self.db['α'])*self.auxPen(τ,epsilon)*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ)))
+		return np.matmul(self.ω2i * self.db['γ'], (self.aux_Prod-1).reshape(self.ni,1) / (self.db['α'] * self.savingsSpread(τ,eps,θ)+(1-self.db['α'])*self.auxPen(τ,eps)*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ)))
 
-	def aux_ESC_eps_OU(self, τ, epsilon):
-		return 1/(self.db['χ2']/self.db['ν']+epsilon*τ/(1+self.db['γu']*epsilon/(1-self.db['γu'])))
+	def aux_ESC_eps_OU(self, τ, eps):
+		return 1/(self.db['χ2']/self.db['ν']+eps*τ/(1+self.db['γu']*eps/(1-self.db['γu'])))
 
-	def aux_ESC_eps_O(self, τ, epsilon, θ):
-		return -(1-self.db['α'])*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ)/(self.db['α'] * self.savingsSpread(τ,epsilon,θ)+(1-self.db['α'])*self.auxPen(τ,epsilon)*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ))
+	def aux_ESC_eps_O(self, τ, eps, θ):
+		return -(1-self.db['α'])*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ)/(self.db['α'] * self.savingsSpread(τ,eps,θ)+(1-self.db['α'])*self.auxPen(τ,eps)*(θ*self.aux_Prod.reshape(self.ni,1)+1-θ))
 
 
 	################ Reporting functions:
@@ -246,29 +246,29 @@ class infHorizon:
 
 	@property
 	def aux_Θsi(self):
-		return pd.DataFrame((self.db['Θs'].values*self.savingsSpread(self.db['τ[t+1]'].values, self.db['epsilon[t+1]'].values, self.db['θ[t+1]'].values)).T, 
+		return pd.DataFrame((self.db['Θs'].values*self.savingsSpread(self.db['τ[t+1]'].values, self.db['eps[t+1]'].values, self.db['θ[t+1]'].values)).T, 
 			index = self.db['t'], columns = self.db['i'])
 
 	@property
 	def aux_Θc1i(self):
-		return pd.DataFrame((self.db['Υ'].values * (self.aux_Prod*(1-self.db['β']/((1+self.db['ξ'])*(1+self.db['β'])))).reshape(self.ni,1)+self.db['Θs'].values*((1-self.db['α'])/self.db['α']) * (1-self.db['θ[t+1]'].values)*self.auxPen(self.db['τ[t+1]'].values, self.db['epsilon[t+1]'].values)/((1+self.db['β']).reshape(self.ni,1))).T,
+		return pd.DataFrame((self.db['Υ'].values * (self.aux_Prod*(1-self.db['β']/((1+self.db['ξ'])*(1+self.db['β'])))).reshape(self.ni,1)+self.db['Θs'].values*((1-self.db['α'])/self.db['α']) * (1-self.db['θ[t+1]'].values)*self.auxPen(self.db['τ[t+1]'].values, self.db['eps[t+1]'].values)/((1+self.db['β']).reshape(self.ni,1))).T,
 			index = self.db['t'], columns = self.db['i'])
 
 	@property
 	def aux_Θc2i(self):
-		return pd.DataFrame((self.db['α']*self.db['A']*self.db['ν']*(self.db['Θh'].values**(1-self.db['α']))*(self.savingsSpread(self.db['τ'].values, self.db['epsilon'].values,self.db['θ'].values)+((1-self.db['α'])/self.db['α'])*self.auxPen(self.db['τ'].values, self.db['epsilon'].values)*(self.db['θ'].values*self.aux_Prod.reshape(self.ni,1)+(1-self.db['θ']).values))).T,
+		return pd.DataFrame((self.db['α']*self.db['A']*self.db['ν']*(self.db['Θh'].values**(1-self.db['α']))*(self.savingsSpread(self.db['τ'].values, self.db['eps'].values,self.db['θ'].values)+((1-self.db['α'])/self.db['α'])*self.auxPen(self.db['τ'].values, self.db['eps'].values)*(self.db['θ'].values*self.aux_Prod.reshape(self.ni,1)+(1-self.db['θ']).values))).T,
 			index = self.db['t'], columns = self.db['i'])
 
 	@property
 	def aux_Θc2pi(self):
-		return pd.DataFrame((self.db['α']*self.leadSym(self.db['A']*self.db['ν']*(self.db['Θh'].values)**(1-self.db['α']))*np.power(self.db['Θs'].values/self.leadSym(self.db['ν']), self.power_s)*(self.savingsSpread(self.db['τ[t+1]'].values, self.db['epsilon[t+1]'].values,self.db['θ[t+1]'].values)+((1-self.db['α'])/self.db['α'])*self.auxPen(self.db['τ[t+1]'].values, self.db['epsilon[t+1]'].values)*(self.db['θ[t+1]'].values*self.aux_Prod.reshape(self.ni,1)+(1-self.db['θ[t+1]'].values)))).T,
+		return pd.DataFrame((self.db['α']*self.leadSym(self.db['A']*self.db['ν']*(self.db['Θh'].values)**(1-self.db['α']))*np.power(self.db['Θs'].values/self.leadSym(self.db['ν']), self.power_s)*(self.savingsSpread(self.db['τ[t+1]'].values, self.db['eps[t+1]'].values,self.db['θ[t+1]'].values)+((1-self.db['α'])/self.db['α'])*self.auxPen(self.db['τ[t+1]'].values, self.db['eps[t+1]'].values)*(self.db['θ[t+1]'].values*self.aux_Prod.reshape(self.ni,1)+(1-self.db['θ[t+1]'].values)))).T,
 			index = self.db['t'], columns = self.db['i'])
 
 	@property
 	def aux_Θ̃c1i(self):
 		return pd.DataFrame((self.db['Υ'].values/((1+self.db['ξ'])*(1+self.db['β'])).reshape(self.ni,1) * (
 							self.aux_Prod.reshape(self.ni,1)+
-							(1-self.db['θ[t+1]'].values)*((1-self.db['α'])/self.db['α'])*self.auxPen(self.db['τ[t+1]'].values, self.db['epsilon[t+1]'].values) * self.auxΓβ1 / (1+((1-self.db['α'])/self.db['α'])*self.auxPen(self.db['τ[t+1]'].values, self.db['epsilon[t+1]'].values)*(self.db['θ[t+1]'].values+(1-self.db['θ[t+1]'].values)*self.auxΓβ2))
+							(1-self.db['θ[t+1]'].values)*((1-self.db['α'])/self.db['α'])*self.auxPen(self.db['τ[t+1]'].values, self.db['eps[t+1]'].values) * self.auxΓβ1 / (1+((1-self.db['α'])/self.db['α'])*self.auxPen(self.db['τ[t+1]'].values, self.db['eps[t+1]'].values)*(self.db['θ[t+1]'].values+(1-self.db['θ[t+1]'].values)*self.auxΓβ2))
 							)).T, index = self.db['t'], columns = self.db['i'])
 
 	@property
@@ -278,12 +278,12 @@ class infHorizon:
 
 	@property
 	def aux_Θc2u(self):
-		return pd.Series((1-self.db['α'])*self.db['A']*self.db['ν']*(self.db['Θh'].values**(1-self.db['α']))*(self.db['χ2']/self.db['ν']+self.db['epsilon'].values*self.auxPen(self.db['τ'].values, self.db['epsilon'].values)),
+		return pd.Series((1-self.db['α'])*self.db['A']*self.db['ν']*(self.db['Θh'].values**(1-self.db['α']))*(self.db['χ2']/self.db['ν']+self.db['eps'].values*self.auxPen(self.db['τ'].values, self.db['eps'].values)),
 				index = self.db['t'])
 
 	@property
 	def aux_Θc2pu(self):
-		return pd.Series((1-self.db['α']) * self.leadSym(self.db['A']) * self.leadSym(self.db['ν']) * (self.leadSym(self.db['Θh']).values**(1-self.db['α'])) * np.power(self.db['Θs'].values/self.leadSym(self.db['ν']), self.power_s) * (self.db['χ2']/self.leadSym(self.db['ν'])+self.db['epsilon[t+1]'].values*self.auxPen(self.db['τ[t+1]'].values, self.db['epsilon[t+1]'].values)),
+		return pd.Series((1-self.db['α']) * self.leadSym(self.db['A']) * self.leadSym(self.db['ν']) * (self.leadSym(self.db['Θh']).values**(1-self.db['α'])) * np.power(self.db['Θs'].values/self.leadSym(self.db['ν']), self.power_s) * (self.db['χ2']/self.leadSym(self.db['ν'])+self.db['eps[t+1]'].values*self.auxPen(self.db['τ[t+1]'].values, self.db['eps[t+1]'].values)),
 				index = self.db['t'])
 
 	def levels_s(self, s_ = None):
@@ -416,7 +416,7 @@ class infHorizon:
 
 	################ Calibration, Argentina:
 	def argentinaCalibrate_preReformEqs(self, x, τ0, s0, θ0, t0):
-		""" Calibrate model to reflect choice of τ, s, θ, epsilon"""
+		""" Calibrate model to reflect choice of τ, s, θ, eps"""
 		self.db['ω'] = x[0]
 		self.db['ωu'] = x[1]
 		self.db['ωη'] = x[2]
@@ -424,7 +424,7 @@ class infHorizon:
 		sol = self.solve_ESC()
 		return np.hstack([sol['τ'].xs(t0)-τ0,
 						  sol['θ'].xs(t0)-θ0,
-						  sol['epsilon'].xs(t0)-argentinaCalEps(θ0, x[3]),
+						  sol['eps'].xs(t0)-argentinaCalEps(θ0, x[3]),
 						  self.savingsRate(sol['Θs'].xs(t0), sol['Θh'].xs(t0))-s0])
 
 	def argentinaCalibrate_preReform(self, τ0, s0, θ0, t0, x0 = None):
@@ -433,16 +433,16 @@ class infHorizon:
 		self.db['ω'], self.db['ωu'], self.db['ωη'], self.db['β'], self.db['βu'] = sol[0], sol[1], sol[2], np.full(self.ni, sol[3]), sol[3]
 		return sol
 
-	def argentinaCalibrate_postReformEqs(self, x, θ, epsilon, t0):
-		""" Ensuret that the model replicates x, θ, epsilon"""
+	def argentinaCalibrate_postReformEqs(self, x, θ, eps, t0):
+		""" Ensuret that the model replicates x, θ, eps"""
 		self.db['ωu'] = x[0]
 		self.db['ωη'] = x[1]
 		sol = self.solve_ESC()
 		return np.hstack([sol['θ'].xs(t0)-θ,
-						  sol['epsilon'].xs(t0)-epsilon])
+						  sol['eps'].xs(t0)-eps])
 
-	def argentinaCalibrate_postReform(self, θ, epsilon, t0, x0 = None):
-		sol, _, ier, msg = optimize.fsolve(lambda x: self.argentinaCalibrate_postReformEqs(x, θ, epsilon, t0), noneInit(x0, [self.db['ωu'], self.db['ωη']]), full_output = True)
+	def argentinaCalibrate_postReform(self, θ, eps, t0, x0 = None):
+		sol, _, ier, msg = optimize.fsolve(lambda x: self.argentinaCalibrate_postReformEqs(x, θ, eps, t0), noneInit(x0, [self.db['ωu'], self.db['ωη']]), full_output = True)
 		assert ier == 1, f"""Error in argentinaCalibrate_postReform. fsolve returns: "{msg}" """
 		self.db['ωu'], self.db['ωη'] = sol[0], sol[1]
 		return sol
@@ -451,7 +451,7 @@ class infHorizon:
 	def argentinaCalibrateEqs(self, x, τ0, s0, t0):
 		self.db['ω'] = x[0]
 		self.db['β'], self.db['βu'] = np.full(self.ni, x[1]), x[1]
-		self.db.update(self.initSC(argentinaCalEps(self.db['θ'].values[0], x[1]), 'epsilon'))
+		self.db.update(self.initSC(argentinaCalEps(self.db['θ'].values[0], x[1]), 'eps'))
 		sol = self.solve_PEE()
 		return np.hstack([sol['τ'].xs(t0)-τ0,
 						  self.savingsRate(sol['Θs'].xs(t0), sol['Θh'].xs(t0))-s0])
@@ -460,7 +460,7 @@ class infHorizon:
 		sol, _, ier, msg = optimize.fsolve(lambda x: self.argentinaCalibrateEqs(x, τ0, s0, t0), noneInit(x0, [self.db['ω'], self.db['β'][0]]), full_output=True)
 		if ier == 1:
 			self.db['ω'], self.db['β'] = sol[0], np.full(self.ni, sol[1])
-			self.db.update(self.initSC(argentinaCalEps(self.db['θ'].values[0], sol[1]), 'epsilon'))
+			self.db.update(self.initSC(argentinaCalEps(self.db['θ'].values[0], sol[1]), 'eps'))
 			return sol
 		else:
 			print(f"Error in argentinaCalibrate: {msg}")
