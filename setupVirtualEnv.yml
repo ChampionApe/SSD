@@ -1,0 +1,14 @@
+name: SSD
+channels:
+  - defaults
+dependencies:
+  - python = 3.11.4
+  - pip = 23.2.1
+  - jupyterlab = 3.3.2
+  - nodejs
+  - pandas = 1.5.3
+  - openpyxl = 3.0.10
+  - scipy = 1.10.1
+  - pip:
+    - seaborn == 0.12.2
+    - pyDbs == 0.0.8
