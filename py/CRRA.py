@@ -1204,7 +1204,7 @@ class infHorizon:
 
 	@property
 	def aux_Θc1i(self):
-		return pd.DataFrame((self.db['Θh'].values**((1+self.db['ξ'])/self.db['ξ'])*(self.aux_Prod.reshape(self.ni,1) * (self.db['B[t+1]'].values.T/(1+self.db['B[t+1]'].values.T))) + self.db['αr'] * self.auxPen(self.db['τ[t+1]'].values, self.db['eps[t+1]'].values) * (1-self.db['θ[t+1]'].values) * self.db['Θs'].values / (1+self.db['B[t+1]'].values.T)).T,
+		return pd.DataFrame((self.db['Θh'].values**((1+self.db['ξ'])/self.db['ξ'])*(self.aux_Prod.reshape(self.ni,1) * (1-self.db['B[t+1]'].values.T/((1+self.db['B[t+1]'].values.T)*(1+self.db['ξ'])))) + self.db['αr'] * self.auxPen(self.db['τ[t+1]'].values, self.db['eps[t+1]'].values) * (1-self.db['θ[t+1]'].values) * self.db['Θs'].values / (1+self.db['B[t+1]'].values.T)).T,
 			index = self.db['t'], columns = self.db['i'])
 
 	@property
