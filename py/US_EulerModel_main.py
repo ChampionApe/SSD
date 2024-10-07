@@ -21,13 +21,14 @@ def interpFixedPoint(ŝ, s):
 	return ŝ1+((ŝ2-ŝ1)*(ŝ1-s1))/(s2-s1-(ŝ2-ŝ1)) # lin. approximation
 
 class Model:
-	def __init__(self, ni = 3, T = 10, ngrid = 50, gridkwargs = None, **kwargs):
+	def __init__(self, ni = 3, T = 10, ngrid = 50, RRgroups = (1,2), gridkwargs = None, **kwargs):
 		""" Fixed namespace """
 		self.ni, self.T, self.ngrid = ni, T, ngrid
 		self.db = self.defaultParameters | kwargs # default parameters
 		self.initIdxs()
 		self.inferPars(**kwargs)
 		self.db.update(self.initGrids(**noneInit(gridkwargs, {})))
+		self.RRgroups = RRgroups
 		self.addNamespaces() # define auxiliary class with "namespace" that helps organize move from stacked numpy arrays to sliced vectors and to pd.Series with indices.
 		self.initUS() # initialize various settings for the specific US case
 		self.C = C(self)
@@ -151,8 +152,9 @@ class Model:
 	def US_eps(self):
 		return (self.db['UShare0']/(1-self.db['UShare0']))
 	def US_θ(self, ξ = None):
+		i,ii = self.RRgroups[0], self.RRgroups[1]
 		ξ = noneInit(ξ, self.db['ξ'])
-		h1, h2 = self.db['Xi'][1]**(ξ)/self.db['ηi'][1]**(1+ξ), self.db['Xi'][2]**(ξ)/self.db['ηi'][2]**(1+ξ)
+		h1, h2 = self.db['Xi'][i]**(ξ)/self.db['ηi'][i]**(1+ξ), self.db['Xi'][ii]**(ξ)/self.db['ηi'][ii]**(1+ξ)
 		return (self.db['RR0']*h1-h2)/(1-h2-self.db['RR0']*(1-h1))
 
 	#######################################################################
@@ -297,6 +299,7 @@ class Model:
 
 	def EE_FH_PEE_report(self, sol, policyFunction, s0):
 		d = self.ns['EE_FH'].unloadSol(sol['x'])
+		d['x'] = sol['x']
 		d['s[t-1]'] = pd.Series(self.FH_sLag(sol['x'], s0), index = self.db['t'])
 		d['τ'] = pd.Series(policyFunction(d['s[t-1]']), index = self.db['t'])
 		return d
@@ -305,6 +308,8 @@ class Model:
 		τf = self.aux_vecPolFunction(gridSol, y = 'τ')
 		κf = self.aux_vecPolFunction(gridSol, y = 'κ')
 		sol = optimize.root(lambda x: self.EE_FH_ESC_objective(x, τf, κf, s0), x0)
+		if not sol['success']:
+			sol = optimize.root(lambda x: self.EE_FH_ESC_objective(x, τf, κf, s0), self.defaultInitials['EE_FH'])
 		assert sol['success'], f""" Could not identify economic equilibrium (self.EE_FH_ESC_solve)."""
 		return self.EE_FH_ESC_report(sol, τf, κf, s0)
 
@@ -316,6 +321,7 @@ class Model:
 
 	def EE_FH_ESC_report(self, sol, τf, κf, s0):
 		d = self.ns['EE_FH'].unloadSol(sol['x'])
+		d['x'] = sol['x']
 		d['s[t-1]'] = pd.Series(self.FH_sLag(sol['x'], s0), index = self.db['t'])
 		d['τ'] = pd.Series(τf(d['s[t-1]']), index = self.db['t'])
 		d['κ'] = pd.Series(κf(d['s[t-1]']), index = self.db['t'])
@@ -342,6 +348,7 @@ class Model:
 		sol, pol = self.PEE_FH(returnPols = True)
 		if update:
 			self.PEE.x0 = {t: pol[t]['τ'] for t in self.db['t']}
+			self.x0['EE_FH'] = sol['x']
 		return np.hstack([sol['τ'].xs(t0)-self.db['τ0'],
 						  sol['R'].xs(t0)-self.db['R0']])
 
@@ -356,6 +363,7 @@ class Model:
 		sol, pol = self.ESC_FH(returnPols = True, **kwargs)
 		if update:
 			self.ESC.x0 = {t: pol[t]['x_unbounded'] for t in self.db['t']}
+			self.x0['EE_FH'] = sol['x']
 		return np.hstack([sol['τ'].xs(t0)-self.db['τ0'],
 						  sol['R'].xs(t0)-self.db['R0']])
 
@@ -389,17 +397,24 @@ class Model:
 						  sol['R'].xs(t0)-self.db['R0']])
 
 	#### 5.2. CALIBRATION OF ξ GIVEN ρ (so far only implemented with log - but simple to extend to general ρ)
-	###### Golden rule search for ξ:
-	def USCal_GoldenRule(self, ξgrid, t0, n = 0, tol = 1e-5, iterMax = 5):
+	###### Golden section search for ξ:
+	def _getCalF(self, log = None):
+		log = noneInit(log, True if self.db['ρ'] == 1 else False)
+		return self.USCalSimple_ESC_log_FH if log else self.USCalSimple_ESC_FH
+	def _getSolF(self, log = None):
+		log = noneInit(log, True if self.db['ρ'] == 1 else False)
+		return self.ESC_log_FH if log else self.ESC_FH
+
+	def USCal_GoldenSection(self, grid, t0, n = 0, tol = 1e-5, iterMax = 5, log = None, var = 'ξ'):
 		""" Golden rule search-like for ξ; n>0 includes a linearly spaced grid on top of linear-interpolated-guided search"""
-		sols = self.USCal_OnGrid(ξgrid, t0, full_output = False)
+		sols = self.USCal_OnGrid(grid, t0, full_output = False, log = log, var = var)
 		out = self.USCal_checkTol(sols, tol)
 		i = 0
 		if out:
 			return out
 		else:
 			while i<iterMax:
-				sols = self.USCal_GR_iteration(t0, sols, n)
+				sols = self.USCal_GR_iteration(t0, sols, n, log = log, var = var)
 				out = self.USCal_checkTol(sols, tol)
 				if out:
 					return out
@@ -407,35 +422,39 @@ class Model:
 		print(f"""Model did not reach tolerance with iterations {iterMax}.""")
 		return sols
 
-	def USCal_OnGrid(self, ξgrid, t0, full_output = False):
-		sols = {'ξ': ξgrid, 'obj': np.empty(ξgrid.size)}
+	def USCal_OnGrid(self, grid, t0, full_output = False, log = None, var = 'ξ'):
+		sols = {var: grid, 'obj': np.empty(grid.size)}
 		if full_output:
-			sols['sol'] = dict.fromkeys(ξgrid)
+			sols['sol'] = dict.fromkeys(grid)
 		sols.update({k: sols['obj'].copy() for k in ('ω','β')})
-		for i in range(ξgrid.size):
-			sols = self.USCal_OnGrid_i(t0, sols, i, full_output = full_output)
+		for i in range(grid.size):
+			sols = self.USCal_OnGrid_i(t0, sols, i, full_output = full_output, log = log, var = var)
 		return sols
 
-	def USCal_OnGrid_i(self, t0, sol, i, ωi = None, βi = None, full_output = False):
-		self.db['ξ'] = sol['ξ'][i]
+	def USCal_OnGrid_i(self, t0, sol, i, ωi = None, βi = None, full_output = False, log = None, var = 'ξ'):
+		self.db[var] = sol[var][i]
+		if var == 'ξ':
+			self.US_Xi() # update calibration of Xi based on new value of ξ.
 		if ωi is not None:
 			self.db['ω'] = sol['ω'][i]
 		if βi is not None:
 			self.db['βi'] = self.US_β(sol['β'][i])
-		self.USCalSimple_ESC_log_FH(t0);
+		self._getCalF(log = log)(t0);
+		# self.USCalSimple_ESC_log_FH(t0);
 		sol['ω'][i], sol['β'][i] = self.db['ω'].copy(), self.US_βinv()
 		if full_output:
-			sol['sol'][i] = self.ESC_log_FH()
+			sol['sol'][i] = self._getSolF(log = log)()
+			# sol['sol'][i] = self.ESC_log_FH()
 			sol['obj'][i] = self.US_κ()-sol['sol'][i]['κ'].xs(t0)
 		else:
-			sol['obj'][i] = self.US_κ()-self.ESC_log_FH()['κ'].xs(t0)
+			sol['obj'][i] = self.US_κ()-self._getSolF(log = log)()['κ'].xs(t0)
 		return sol
 
-	def USCal_GR_iteration(self, t0, sols, n):
+	def USCal_GR_iteration(self, t0, sols, n, log = None, var = 'ξ'):
 		idx = self.USCal_SCidx(sols)
 		obj0, obj1 = sols['obj'][idx], sols['obj'][idx+1]
 		sols = self.USCal_updateGrid(sols, idx, obj0, obj1, n)
-		[self.USCal_OnGrid_i(t0, sols, i, ωi = sols['ω'], βi = sols['β'], full_output=False) for i in range(1,n+2)]
+		[self.USCal_OnGrid_i(t0, sols, i, ωi = sols['ω'], βi = sols['β'], full_output=False, log = log, var = var) for i in range(1,n+2)]
 		return sols
 
 	def USCal_SCidx(self, sol):
