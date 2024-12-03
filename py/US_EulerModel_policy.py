@@ -498,7 +498,7 @@ class PEE:
 		o = objective.reshape((n, self.m.ngrid))
 		τ = grids['gridnd_τ'].values.reshape((n, self.m.ngrid))
 		changeSign = np.diff(np.sign(o), axis = 0) < 0
-		return inverseInterp1d(τ[:-1][changeSign], τ[1:][changeSign], o[:-1][changeSign], o[1:][changeSign])
+		return inverseInterp1d(τ[:-1].T[changeSign.T], τ[1:].T[changeSign.T], o[:-1].T[changeSign.T], o[1:].T[changeSign.T])
 
 	def mapToIdxnd(self, k, idxnd, solp):
 		if solp[k].ndim == 1:

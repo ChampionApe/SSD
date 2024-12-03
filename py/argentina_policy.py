@@ -56,9 +56,9 @@ class LOG:
 		self.BG = m.BG # requires gridded solutions
 		self.db = m.db
 		self.x0 = self.defaultInitials
-		self.kwargs_T = {'style': 'Vector'}
-		self.kwargs_T_ = {'style': 'Vector', 'x0_from_solp': False}
-		self.kwargs_t = {'style': 'Vector', 'x0_from_solp': True}
+		self.kwargs_T = {'style': 'Vector', 'method': 'hybr', 'options': None}
+		self.kwargs_T_ = {'style': 'Vector', 'method': 'hybr', 'options': None, 'x0_from_solp': False}
+		self.kwargs_t = {'style': 'Vector', 'method': 'hybr', 'options': None, 'x0_from_solp': True}
 		self.fInterp = customLinIntp
 		self.kwargsInterp = {}
 		# self.fInterp = interpolate.PchipInterpolator
@@ -66,22 +66,22 @@ class LOG:
 
 	@property
 	def defaultInitials(self):
-		return dict.fromkeys(self.db['txE'], np.full(self.m.ns['LOGpol'].len, .1)) | {self.m.T-1: np.full(self.m.ns0, .2)}
+		return dict.fromkeys(self.db['txE'], np.full(self.m.ns['LOGpol'].len, .1)) | {self.db['t'][-1]: np.full(self.m.ns0, .2)}
 
 	@property
 	def FH_kwargs(self):
-		return dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.m.T-2: self.kwargs_T_, self.m.T-1: self.kwargs_T}
+		return dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.db['t'][-2]: self.kwargs_T_, self.db['t'][-1]: self.kwargs_T}
 
 	def FH(self, pars = None, update = True):
 		""" Return dict of policy functions. If kwargs are passed, this should be a dict of kwargs for each t. """
 		kwargs = noneInit(pars, self.FH_kwargs)
 		sols = dict.fromkeys(self.db['t'])
-		t = self.m.T-1
-		self.BG.t = self.m.T-1
+		t = self.db['t'][-1]
+		self.BG.t = t
 		sols[t] = self.solve(t = 'T', **({'x0': self.x0[t]} | kwargs[t]))
 		if update:
 			self.x0[t] = sols[t]['τ_unbounded']
-		for t in range(self.m.T-2, -1, -1):
+		for t in self.db['t'][-2::-1]:
 			self.BG.t = t
 			sols[t] = self.solve(solp = sols[t+1], **({'x0': self.x0[t]} | kwargs[t]))
 			if update:
@@ -90,10 +90,10 @@ class LOG:
 
 	def vectorPolicy(self, sols, y = 'τ', grids = None, kwargs = None):
 		""" Return vector of predicted policies from vector of states; the "0" index is used to make sure that it returns a 1d object, but it requires that we query a single point at a time. """
-		d = {t: sols[t][y] for t in self.db['t']}
+		d = {t: sols[self.db['t'][t]][y] for t in range(self.m.T)}
 		kwargs = self.kwargsInterp | noneInit(kwargs, {})
 		grids = noneInit(grids, self.db['s0Grid'])
-		return lambda x: np.array([self.fInterp(grids, d[t], **kwargs)(x[t]) for t in self.db['t']])
+		return lambda x: np.array([self.fInterp(grids, d[t], **kwargs)(x[t]) for t in range(self.m.T)])
 
 	def gridPolicy(self, v, grids = None, kwargs = None):
 		return self.gridPolicy1d(v, noneInit(grids, self.db['s0Grid']), kwargs = kwargs) if v.ndim == 1 else self.gridPolicy2d(v, noneInit(grids, self.db['s0Grid']), kwargs = kwargs)
@@ -110,10 +110,10 @@ class LOG:
 	def solve(self, style = 'Vector', t = 't', **kwargs):
 		return getattr(self, f'solve{style}_{t}')(**kwargs)
 
-	def solveVector_t(self, solp = None, x0_from_solp = False, x0 = None, **kwargs):
+	def solveVector_t(self, solp = None, x0_from_solp = False, x0 = None, method = 'hybr', options = None, **kwargs):
 		sol = self.precomputations_t(solp, self.db['s0Grid'])
 		fp = {k: self.gridPolicy(solp[k]) for k in ('τ','dτ/d(s0/s)')}
-		x = optimize.root(lambda x: self.objective_t(x, sol, fp), x0_solp(x0, solp['x_unbounded'], x0_from_solp), **kwargs)
+		x = optimize.root(lambda x: self.objective_t(x, sol, fp), x0_solp(x0, solp['x_unbounded'], x0_from_solp), method = method, options = options)
 		assert x['success'], f""" Coulnd't identify policy function for year t = {self.BG.t}. Previous solution x = {solp['x_unbounded']}"""
 		return self.report_t(x['x'], sol, fp)
 
@@ -159,9 +159,9 @@ class LOG:
 		return sol[f'∂ln({k})/∂τ']+dτp_dτ * sol[f'∂ln({k})/∂τ[t+1]']
 
 	### TERMINAL STATE FUNCTIONS
-	def solveVector_T(self, x0 = None, **kwargs):
+	def solveVector_T(self, x0 = None, method = 'hybdr', options = None, **kwargs):
 		sol = self.precomputations_T(self.db['s0Grid'])
-		x = optimize.root(lambda τ: self.objective_T(τ, sol), x0, **kwargs)
+		x = optimize.root(lambda τ: self.objective_T(τ, sol), x0, method = method, options = options)
 		assert x['success'], f""" Could not identify PEE solution (self.solveVector_T)"""
 		return self.report_T(x['x'], sol)
 
@@ -187,7 +187,7 @@ class LOG:
 		return sol
 
 	def getGriddedGradients(self, sol):
-		return {'dτ/d(s0/s)': np.gradient(sol['τ'], sol['s0/s[t-1]'])}
+		return {'dτ/d(s0/s)': np.gradient(sol['τ'], sol['s0/s[t-1]'],edge_order =2)}
 
 class PEE:
 	def __init__(self, m):
@@ -195,41 +195,41 @@ class PEE:
 		self.BG = m.BG # requires gridded solutions
 		self.db = m.db
 		self.x0 = self.defaultInitials
-		self.kwargs_T = {'style': 'Vector', 'method': 'krylov'}
-		self.kwargs_T_ = {'style': 'Vector', 'method': 'krylov', 'x0_from_solp': False}
-		self.kwargs_t = {'style': 'Vector', 'method': 'krylov', 'x0_from_solp': True}
+		self.kwargs_T =  {'style': 'Vector', 'method': 'krylov', 'options': {'maxiter': 100}}
+		self.kwargs_T_ = {'style': 'Vector', 'method': 'krylov', 'options': {'maxiter': 100}, 'x0_from_solp': False}
+		self.kwargs_t =  {'style': 'Vector', 'method': 'krylov', 'options': {'maxiter': 100}, 'x0_from_solp': True}
 		self.kwargsInterp = {'method': 'linear', 'bounds_error': False, 'fill_value': None}
 
 	def interpInitialsFromSols(self, sols, idx, grids):
 		queryCurrentGrid = np.vstack([self.db['sGrid_ss0'].values, self.db['s0Grid_ss0'].values]).T
-		self.x0[self.m.T-1] = self.gridPolicy(sols[self.m.T-1]['τ_unbounded'], idx = idx, grids = grids)(queryCurrentGrid)
-		for t in range(self.m.T-2,-1,-1):
+		self.x0[self.db['t'][-1]] = self.gridPolicy(sols[self.db['t'][-1]]['τ_unbounded'], idx = idx, grids = grids)(queryCurrentGrid)
+		for t in self.db['t'][-2::-1]:
 			self.x0[t] = np.hstack([self.gridPolicy(sols[t][k], idx = idx, grids = grids)(queryCurrentGrid) for k in ('s','s0/s','τ_unbounded')])
 
 	def interpInitialsFromLOG(self, sols, path):
 		""" Get self.x0 dictionary from log solution """
-		t = self.m.T-1
+		t = self.db['t'][-1]
 		self.x0[t] = pd.Series(0, index = self.db['ss0Idx']).add(pd.Series(sols[t]['τ'], index = self.db['s0Idx'])).values
 		[self.x0.__setitem__(t, np.hstack([pd.Series(0, index = self.db['ss0Idx']).add(pd.Series(sols[t][k] if k != 's' else path[k][t], index = self.db['s0Idx'])).values for k in ('s','s0/s','τ')])) for t in self.db['txE']];
 
 	@property
 	def defaultInitials(self):
-		return dict.fromkeys(self.db['txE'], np.full(self.m.ns['PEEpol'].len, .1)) | {self.m.T-1: np.full(self.m.nss0grid, .2)}
+		return dict.fromkeys(self.db['txE'], np.full(self.m.ns['PEEpol'].len, .1)) | {self.db['t'][-1]: np.full(self.m.nss0grid, .2)}
 
 	@property
 	def FH_kwargs(self):
-		return dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.m.T-2: self.kwargs_T_, self.m.T-1: self.kwargs_T}
+		return dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.db['t'][-2]: self.kwargs_T_, self.db['t'][-1]: self.kwargs_T}
 
 	def FH(self, pars = None, update = True):
 		""" Return dict of policy functions. If kwargs are passed, this should be a dict of kwargs for each t. """
 		kwargs = noneInit(pars, self.FH_kwargs)
 		sols = dict.fromkeys(self.db['t'])
-		t = self.m.T-1
-		self.BG.t = self.m.T-1
+		t = self.db['t'][-1]
+		self.BG.t = t
 		sols[t] = self.solve(t = 'T', **({'x0': self.x0[t]} | kwargs[t]))
 		if update:
 			self.x0[t] = sols[t]['τ_unbounded']
-		for t in range(self.m.T-2, -1, -1):
+		for t in self.db['t'][-2::-1]:
 			self.BG.t = t
 			sols[t] = self.solve(solp = sols[t+1], **({'x0': self.x0[t]} | kwargs[t]))
 			if update:
@@ -252,18 +252,18 @@ class PEE:
 
 	def vectorPolicy(self, sols, y = 'τ', idx = None, grids = None, kwargs = None):
 		""" Return vector of predicted policies from vector of states; the "0" index is used to make sure that it returns a 1d object, but it requires that we query a single point at a time. """
-		d = {t: pd.Series(sols[t][y], index = noneInit(idx, self.db['ss0Idx'])).unstack('s0Idx').values for t in self.db['t']}
+		d = {t: pd.Series(sols[self.db['t'][t]][y], index = noneInit(idx, self.db['ss0Idx'])).unstack('s0Idx').values for t in range(self.m.T)}
 		kwargs = self.kwargsInterp | noneInit(kwargs, {})
 		grids = noneInit(grids, (self.db['sGrid'], self.db['s0Grid']))
-		return lambda x: np.array([interpolate.interpn(grids, d[t], x[t], **kwargs)[0] for t in self.db['t']])
+		return lambda x: np.array([interpolate.interpn(grids, d[t], x[t], **kwargs)[0] for t in range(self.m.T)])
 
 	def solve(self, style = 'Vector', t = 't', **kwargs):
 		return getattr(self, f'solve{style}_{t}')(**kwargs)
 
-	def solveVector_t(self, solp = None, x0_from_solp = False, x0 = None, **kwargs):
+	def solveVector_t(self, solp = None, x0_from_solp = False, x0 = None, method = 'krylov', options = None, **kwargs):
 		""" Solve problem as a sequence of root-finding problems. """
 		fp = {k: self.gridPolicy(solp[k]) for k in ('τ','Bi','B0', '∂ln(h)/∂τ', '∂ln(h)/∂ln(s[t-1])', 'dτ/ds[t-1]','dτ/d(s0/s)','dln(h)/dln(s[t-1])')} # dict interpolants
-		x = optimize.root(lambda x: self.objective_t(x, fp), x0_solp(x0, solp['x_unbounded'], x0_from_solp), **kwargs)
+		x = optimize.root(lambda x: self.objective_t(x, fp), x0_solp(x0, solp['x_unbounded'], x0_from_solp), method = method, options = options)
 		assert x['success'], f""" Couldn't identify policy function for year t={self.BG.t}. Previous solution x = {solp['x_unbounded']}. """
 		return self.reportVector_t(x['x'], fp)
 
@@ -278,7 +278,7 @@ class PEE:
 	def funcOfτ_t(self, x, fp):
 		sol = {	'τ_unbounded': self.m.ns['PEEpol'](x, 'τ'), 's': self.m.ns['PEEpol'](x, 's'), 's0/s': self.m.ns['PEEpol'](x, 's0/s'),
 				's[t-1]': self.db['sGrid_ss0'].values, 's0/s[t-1]': self.db['s0Grid_ss0'].values}
-		sol['s'] = np.clip(sol['s'], self.db['s_l'], None)
+		sol['s'] = np.clip(sol['s'], 1e-6, None)
 		sol['τ'] = np.clip(sol['τ_unbounded'], self.db['τ_l'], self.db['τ_u']) 
 		z0 = np.vstack([sol['s'], sol['s0/s']]).T # vector of states to pass to interpolators 
 		solp = {k: v(z0) for k,v in fp.items()} # query t+1 solution
@@ -325,9 +325,9 @@ class PEE:
 		return sol[f'∂ln({k})/∂τ']+dτp_dτ * sol[f'∂ln({k})/∂τ[t+1]']
 
 	### TERMINAL STATE FUNCTIONS
-	def solveVector_T(self, x0 = None, **kwargs):
+	def solveVector_T(self, x0 = None, method = 'krylov', options = None, **kwargs):
 		sol = self.precomputations_T(self.db['sGrid_ss0'].values, self.db['s0Grid_ss0'].values)
-		x = optimize.root(lambda τ: self.objective_T(τ, sol), x0, **kwargs)
+		x = optimize.root(lambda τ: self.objective_T(τ, sol), x0, method = method, options = options)
 		assert x['success'], f""" Could not identify PEE solution (self.solveVector_T)"""
 		return self.report_T(x['x'], sol)
 
@@ -360,8 +360,8 @@ class PEE:
 	def getGriddedGradients(self, sol):
 		s = pd.Series(sol['τ'], index = self.db['ss0Idx']).unstack('sIdx')
 		h = pd.Series(sol['h'], index = self.db['ss0Idx']).unstack('sIdx')
-		grdnt = np.gradient(s.values, self.db['s0Grid'], self.db['sGrid'])
-		grdnt_h = np.gradient(h.values, self.db['s0Grid'], self.db['sGrid'])
+		grdnt = np.gradient(s.values, self.db['s0Grid'], self.db['sGrid'], edge_order =2)
+		grdnt_h = np.gradient(h.values, self.db['s0Grid'], self.db['sGrid'], edge_order =2)
 		return {'dτ/ds[t-1]': pd.DataFrame(grdnt[1], index = s.index, columns = s.columns).stack().values, 
 			    'dτ/d(s0/s)': pd.DataFrame(grdnt[0], index = s.index, columns = s.columns).stack().values,
 			    'dln(h)/dln(s[t-1])': pd.DataFrame(grdnt_h[1], index = h.index, columns = h.columns).stack().values * sol['s[t-1]'] /sol['h']}

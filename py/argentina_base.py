@@ -7,6 +7,7 @@ class _Base:
 	def __init__(self, m):
 		self.m = m
 		self.db = m.db
+		self.t0 = self.db['t'][0]
 
 	#######################################################################
 	##########					0. Aux methods				 	###########
@@ -71,7 +72,7 @@ class BaseScalar(_Base):
 		self.t = t
 
 	def __call__(self, k, t = None):
-		return self.db[f'{k}'].xs(max(noneInit(t, self.t), 0))
+		return self.db[f'{k}'].xs(max(noneInit(t, self.t), self.t0))
 
 	def get(self, k, t = None):
 		s = self(k, t = t)
@@ -416,7 +417,7 @@ class BaseTime(_Base):
 		super().__init__(m)
 		self.ts = ts
 	def __call__(self, k, t = None):
-		return self.db[k] if t is None else self.db[k].iloc[t]
+		return self.db[k] if t is None else self.db[k].loc[t]
 	def get(self, k, t = None):
 		s = self(k, t = t)
 		return s.values if isinstance(s, (pd.Series, pd.DataFrame)) else s
@@ -460,9 +461,9 @@ class BaseTime(_Base):
 	##########				4. Finite horizon methods			###########
 	#######################################################################
 	def FH_Θh(self, τ = None, τp = None, Γs = None):
-		return np.hstack([self.Θh_t(τ = τ[:-1], τp = τp[:-1], Γs = Γs, t = self.db['txE']), self.Θh_T(τ = τ[-1], t = -1)])
+		return np.hstack([self.Θh_t(τ = τ[:-1], τp = τp[:-1], Γs = Γs, t = self.db['txE']), self.Θh_T(τ = τ[-1], t = self.db['t'][-1])])
 	def FH_h(self, s_ = None, τ = None, τp = None, Γs = None):
-		return np.hstack([self.h_t(s_=s_[:-1], τ = τ[:-1], τp = τp[:-1], Γs = Γs, t = self.db['txE']), self.h_T(s_ = s_[-1], τ = τ[-1], t = -1)])
+		return np.hstack([self.h_t(s_=s_[:-1], τ = τ[:-1], τp = τp[:-1], Γs = Γs, t = self.db['txE']), self.h_T(s_ = s_[-1], τ = τ[-1], t = self.db['t'][-1])])
 	def FH_s(self, h = None, Γs = None):
 		return self.s_t(h = h[:-1], Γs = Γs, t = self.db['txE'])
 	def FH_Γs(self, s = None, hp = None, τp = None):
@@ -484,9 +485,9 @@ class BaseTime(_Base):
 		return self.Θs_t(Θh[:-1], Γs = Γs, t = self.db['txE'])
 	def FH_LOG_s(self, Θs = None, s0 = None):
 		s = np.empty(self.m.T-1)
-		s[0] = Θs[0]*(s0/self.db['ν'][0])**(self.power_s(0))
-		for t in self.db['txE'][1:]:
-			s[t] = Θs[t]*(s[t-1]/self.db['ν'][t])**(self.power_s(t))
+		s[0] = Θs[0]*(s0/self.get('ν',self.t0))**(self.power_s(self.t0))
+		for t in range(1, self.m.T-1):
+			s[t] = Θs[t]*(s[t-1]/self.get('ν',self.db['t'][t]))**(self.power_s(self.db['t'][t]))
 		return s
 	def FH_LOG_h(self, Θh = None, s_ = None):
 		return Θh * (s_/self.get('ν'))**self.power_h()

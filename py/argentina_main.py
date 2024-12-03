@@ -1,6 +1,7 @@
 import numpy as np, pandas as pd, scipy, functools
 from pyDbs import is_iterable, SymMaps as sm, adj
 from scipy import optimize
+from copy import deepcopy
 from argentina_base import BaseScalar, BaseGrid, BaseTime
 from argentina_policy import PEE, LOG, inverseInterp1d, cartesianGrids
 from argentinaAnalytical_base import BaseScalar_A, BaseGrid_A, BaseTime_A
@@ -66,6 +67,22 @@ class Model:
 	#######################################################################
 	##########					1. INIT METHODS				 	###########
 	#######################################################################
+	def createCopyFromt0(self, t0):
+		""" Return a copy of Model instance 'm' with time starting from t0 """
+		mt0 = deepcopy(self)
+		mt0.T = self.T-t0
+		for k,v in self.db.items():
+			if isinstance(v, (pd.Series, pd.DataFrame, pd.Index)):
+				mt0.db[k] = adj.rc_pd(v, self.db['t'][t0:])
+		mt0.db['ν'] = self.db['ν'][t0:]
+		mt0.addNamespaces() # reset definition of namespaces
+		[baseIns.__setattr__('t0', mt0.db['t'][0]) for baseIns in (mt0.B, mt0.BG, mt0.BT)];
+		mt0.PEE.x0 = {t: self.PEE.x0[t] for t in mt0.db['t']}
+		mt0.LOG.x0 = {t: self.LOG.x0[t] for t in mt0.db['t']}
+		for ns in ('EE_FH','EE_IH','EE_FH_PEE','EE_FH_LOG'):
+			mt0.x0[ns] = np.hstack([adj.rc_pd(self.ns[ns].get(self.x0[ns],k), mt0.db['t']) for k in self.ns[ns].symbols])
+		return mt0
+
 	def initIdxs(self):
 		self.db['t'] = pd.Index(range(self.T), name = 't')
 		self.db['txE'] = pd.Index(range(self.T-1), name = 't') # Time index without terminal period
@@ -117,10 +134,12 @@ class Model:
 		return self.BT.Γh()
 
 	def addNamespaces(self):
-		self.ns = {}
+		if not hasattr(self, 'ns'):
+			self.ns = {}
 		self.ns['EE_IH'] = sm(symbols = {x: self.db['t'] for x in ('s','h','Γs')}) # solve EE given policy
 		self.ns['EE_FH'] = sm(symbols = {'h': self.db['t'], 's': self.db['txE'], 'Γs': self.db['txE']}) # solve EE given policy, finite horizon
 		self.ns['EE_FH_PEE'] = sm(symbols = {'h': self.db['t'], 's': self.db['txE'], 'Γs': self.db['txE'], 's0/s': self.db['txE']}) # solve EE with endogenous policy, finite horizon.
+		self.ns['EE_FH_LOG'] = sm(symbols = {'τ': self.db['t']})
 		self.ns['exo'] = sm(symbols = (dict.fromkeys(self.default1Dparams, self.db['t']) |
 									   dict.fromkeys(self.default2Dparams, self.db['tj'])| 
 									   dict.fromkeys(self.aux1DParams, self.db['t']) |
@@ -257,10 +276,10 @@ class Model:
 		d.update({f'{x}_n': 101 for x in ('τ','θ','eps')})
 		d.update({f'{x}_l': 1e-4 for x in ('τ','θ','eps')})
 		d.update({f'{x}_u': 1-1e-4 for x in ('τ','θ','eps')})
-		d['s_l'] = .001 # stuff and stuff
+		d['s_l'] = 1e-3 # stuff and stuff
 		d['s0_l'] = 0
 		d['s0_u'] = 1 # s0/s
-		d['s_u'] = 2 * self.SS_Scalar_solve(0, t = 0)['s'] # set upper bound to 2 times the steady state level with zero taxes (largest possible savings rate)
+		d['s_u'] = self.SS_Scalar_solve(0, t = 0)['s'] # set upper bound to 2 times the steady state level with zero taxes (largest possible savings rate)
 		# d['s_u'] = 0.02
 		return d
 
@@ -282,8 +301,8 @@ class Model:
 		ξ= self.db['ξ'].xs(self.db['t0'])
 		h1,h2 = (self.db['Xi'][i]**ξ/self.db['ηi'][i]**(1+ξ)).xs(self.db['t0']), (self.db['Xi'][ii]**ξ/self.db['ηi'][ii]**(1+ξ)).xs(self.db['t0'])
 		return (self.db['RR0']*h1-h2)/(1-h2-self.db['RR0']*(1-h1))
-	def getEps(self):
-		return 0.7 * (1-self.db['θ'].xs(self.db['t0'])) * (self.simpleβinv()**(5/30)*9.45/14.45+self.simpleβinv()**(10/30)*12.55/22.55)/2
+	def getEps(self, coverageRate = 0.7):
+		return coverageRate * (1-self.db['θ'].xs(self.db['t0'])) * (self.simpleβinv()**(5/30)*9.45/14.45+self.simpleβinv()**(10/30)*12.55/22.55)/2
 
 
 	#######################################################################
@@ -374,7 +393,7 @@ class Model:
 	def EE_FH_LOG_solve(self, gridSol, z0 = None, x0 = None, update = True):
 		policyFunction = self.LOG.vectorPolicy(gridSol)
 		if z0 is None:
-			ss = self.steadyStateLOG(self.LOG.gridPolicy(gridSol[0]['τ']), t = 0)
+			ss = self.steadyStateLOG(self.LOG.gridPolicy(gridSol[self.db['t'][0]]['τ']), t = self.db['t'][0])
 			z0 = [ss['s'], ss['s0/s']]
 			if x0 is None:
 				x0 = np.full(self.T, ss['τ'])
@@ -414,7 +433,7 @@ class Model:
 	def EE_FH_PEE_solve(self, gridSol, z0 = None, x0 = None, τ0 = None, update = True):
 		policyFunction = self.PEE.vectorPolicy(gridSol)
 		if z0 is None:
-			ss = self.steadyStatePEE(self.PEE.gridPolicy(gridSol[0]['τ']), τ0 = τ0, t = 0)
+			ss = self.steadyStatePEE(self.PEE.gridPolicy(gridSol[self.db['t'][0]]['τ']), τ0 = τ0, t = self.db['t'][0])
 			z0 = [ss['s'], ss['s0/s']]
 		sol = optimize.root(lambda x: self.EE_FH_PEE_objective(x, policyFunction, z0), noneInit(x0, self.x0['EE_FH_PEE']))
 		assert sol['success'], f""" Could not identify economic equilibrium (self.EE_FH_PEE_solve) with parameter inputs: 
@@ -448,13 +467,13 @@ class Model:
 		syms = list(self.ns['EE_FH_PEE'].symbols)
 		idx = noneInit(idx, (syms.index('s'), syms.index('s0/s')))
 		sol = dict.fromkeys(self.db['t'])
-		sol[0], z0 = self.EE_FH_PEE_approx_t0(gridSol[0], z0 = z0, τ0 = τ0, **kwargs)
+		sol[self.db['t'][0]], z0 = self.EE_FH_PEE_approx_t0(gridSol[self.db['t'][0]], z0 = z0, τ0 = τ0, **kwargs)
 		[sol.__setitem__(t, self.EE_FH_PEE_approx_tx0(gridSol[t], self.getZ0(sol[t-1], idx = idx), t), **kwargs) for t in self.db['t'][1:]]
 		return self.approxStackVector(sol), z0[0]
 
 	def EE_FH_PEE_approx_t0(self, gridSol0, z0 = None, τ0 = None, **kwargs):
 		if z0 is None:
-			ss = self.steadyStatePEE(self.PEE.gridPolicy(gridSol0['τ'], **kwargs), τ0 = τ0, t = 0)
+			ss = self.steadyStatePEE(self.PEE.gridPolicy(gridSol0['τ'], **kwargs), τ0 = τ0, t = self.db['t'][0])
 			z0 = np.array([ss['s'], ss['s0/s']]).T
 		return np.array([self.PEE.gridPolicy(gridSol0[k], **kwargs)(z0)[0] for k in self.ns['EE_FH_PEE'].symbols]), z0
 	def getZ0(self, sol_, idx = (1,3)):
@@ -545,7 +564,7 @@ class Model_A(Model):
 		self.initPars(pars = pars) # add parameters and targets
 		self.initArgentina()
 		self.updateAuxPars()
-		self.initGrids(ngrids **noneInit(gridkwargs, {}))
+		self.initGrids(ngrid, **noneInit(gridkwargs, {}))
 		self.PEE = PEE_A(self)
 		self.LOG = LOG_A(self)
 
@@ -572,7 +591,7 @@ class Model_A(Model):
 		self.ngrid = ngrid
 		d = self.defaultGridSettings | kwargs
 		d['sGrid'] = polGrid(d['s_l'], d['s_u'], self.ngrid, sgridExp) # grid value 1d, nonlinear for state 's'
-		d['τGrid'] = defaultGrid('τ', self.db) # grid value 1d, policy grid for τ
+		d['τGrid'] = defaultGrid('τ', d) # grid value 1d, policy grid for τ
 		# Stacked 2d grids as cartesian products of the two:
 		idx1ds, d['sτIdx'], gridsnd = cartesianGrids({'τ': d['τGrid'], 's': d['sGrid']})
 		d['sIdx'], d['τIdx'] = idx1ds['s'], idx1ds['τ'] 
