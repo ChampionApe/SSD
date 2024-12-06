@@ -299,10 +299,12 @@ class BaseScalar_A(_Base_A):
 	def calib_X0(self, η0 = None, Θh = None, t = None):
 		t = noneInit(t, self.db['t0'])
 		return η0 * ((1-self('α',t))/self('Γh',t)**(self('α',t)))**(1/(1+self('ξ',t)*self('α',t))) / ((Θh*self('zx0',t))**(1/self('ξ',t)))
-	def calib_savingsRate(self, Θs = None, Θh = None, t = None):
+	# def calib_savingsRate(self, Θs = None, Θh = None, t = None):
+	# 	t = noneInit(t, self.db['t0'])
+	# 	return Θs/((1-self('α',t))*(Θh**(1-self('α',t))))
+	def calib_savingsRate(self, s_ = None, s= None, h = None, t = None):
 		t = noneInit(t, self.db['t0'])
-		return Θs/((1-self('α',t))*(Θh**(1-self('α',t))))
-
+		return s / ((s_/self.get('ν',t))**self.get('α',t) * h**(1-self.get('α',t)))
 
 class BaseGrid_A(BaseScalar_A):
 	def __init__(self, m, t = None):

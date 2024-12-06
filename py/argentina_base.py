@@ -107,7 +107,7 @@ class BaseScalar(_Base):
 	def EELaggedDerivatives(self, Ω = None, Ψ = None, Bip = None, dlnhp_dτp = None, τp = None, B0p = None, Θs = None, t = None):
 		""" The derivative used here dlnhp_dτp = ∂ln(h[t+1])/∂τ[t+1]"""
 		k1 = Ω * (1+self.get('ξ',t))/(1+self.get('α',t)*self.get('ξ',t))
-		k2 = self.get('αr',t)*self.get('p',t)/self.get('κ',t) * (self.get('θ[t+1]',t)+(1-self.get('θ[t+1]',t))*self.auxΓB2(Bip,t))
+		k2 = (self.get('αr',t)*self.get('p',t)/self.get('κ',t)) * (self.get('θ[t+1]',t)+(1-self.get('θ[t+1]',t))*self.auxΓB2(Bip,t))
 		k3 = k2/(1+τp*k2)
 		dlns_dτp  = (1/(1+Ψ*(1-self.power_h(t))*(1+k1*τp))) * (k1 + (1+k1*τp)*(Ψ*dlnhp_dτp-k3))
 		k4 = dlnhp_dτp-dlns_dτp*(1-self.power_h(t))
@@ -334,10 +334,12 @@ class BaseScalar(_Base):
 	def calib_X0(self, η0 = None, Θh = None, t = None):
 		t = noneInit(t, self.db['t0'])
 		return η0 * ((1-self('α',t))/self('Γh',t)**(self('α',t)))**(1/(1+self('ξ',t)*self('α',t))) / ((Θh*self('zx0',t))**(1/self('ξ',t)))
-	def calib_savingsRate(self, Θs = None, Θh = None, t = None):
+	# def calib_savingsRate(self, Θs = None, Θh = None, t = None):
+	# 	t = noneInit(t, self.db['t0'])
+	# 	return Θs/((1-self('α',t))*(Θh**(1-self('α',t))))
+	def calib_savingsRate(self, s_ = None, s= None, h = None, t = None):
 		t = noneInit(t, self.db['t0'])
-		return Θs/((1-self('α',t))*(Θh**(1-self('α',t))))
-
+		return s / ((1-self.get('α',t))*(s_/self.get('ν',t))**self.get('α',t) * h**(1-self.get('α',t)))
 
 class BaseGrid(BaseScalar):
 	def __init__(self, m, t = None):

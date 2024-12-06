@@ -1,5 +1,6 @@
 import numpy as np, pandas as pd
 from scipy import optimize, interpolate
+from auxFunctions import customLinInterp
 from pyDbs import is_iterable, adj
 import warnings
 warnings.simplefilter(action = "ignore", category = FutureWarning)
@@ -21,22 +22,6 @@ def x0_solp(x0, solp, x0_from_solp):
 def inverseInterp1d(x1, x2, y1, y2):
 	return x1+y1*(x2-x1)/(y1-y2)
 
-def customInterp2d(x, xp, fp):
-	xb = np.clip(x, min(xp)+np.finfo(float).eps, max(xp))
-	j = np.searchsorted(xp, xb, side = 'left') - 1
-	d = ((x-xp[j])/(xp[j+1]-xp[j]))[:,None]
-	return (1-d)*fp[j,:] + d * fp[j+1,:]
-
-def customLinIntp(x, y, **kwargs):
-	return lambda z: np.interp(z,x,y, **kwargs)
-
-def interpSol(x, xp, fp):
-	""" linear interpolation where x, xp are 1d vectors and fp may be 1d or 2d (simply repeats interpolation over the 2d)"""
-	if fp.ndim == 1:
-		return np.interp(x,xp,fp)
-	else:
-		return np.vstack([np.interp(x,xp,fp[:,i]) for i in range(fp.shape[1])]).T
-
 def cartesianGrids(grids1d):
 	""" grids1d = dict of grids. """
 	idx1ds = {k: pd.Index(range(grids1d[k].size), name = f'{k}Idx') for k in grids1d}
@@ -57,10 +42,6 @@ class LOG_A:
 		self.BT = m.BT # 
 		self.db = m.db
 		self.x0 = self.defaultInitials
-		self.fInterp = customLinIntp
-		self.kwargsInterp = {}
-		# self.fInterp = interpolate.PchipInterpolator
-		# self.kwargsInterp = {'extrapolate': True}
 
 	@property
 	def defaultInitials(self):
@@ -75,7 +56,10 @@ class PEE_A:
 		self.kwargs_T = {'style': 'Vector', 'method': 'krylov', 'options': None}
 		self.kwargs_T_ = {'style': 'Vector', 'method': 'krylov', 'options': None, 'x0_from_solp': False}
 		self.kwargs_t = {'style': 'Vector', 'method': 'krylov', 'options': None, 'x0_from_solp': True}
-		self.kwargsInterp = {'method': 'linear', 'bounds_error': False, 'fill_value': None}
+		self.fInterp = customLinInterp
+		self.kwargsInterp = {}
+		# self.fInterp = interpolate.PchipInterpolator
+		# self.kwargsInterp = {'extrapolate': True}
 
 	@property
 	def defaultInitials(self):
@@ -102,7 +86,7 @@ class PEE_A:
 		return sols
 
 	def resampleSolution(self, sol):
-		d = {k: interpSol(self.db['sGrid'], sol['s[t-1]'], v) for k,v in sol.items() if k != 's[t-1]'}
+		d = {k: self.fInterp(sol['s[t-1]'], v)(self.db['sGrid']) for k,v in sol.items() if k != 's[t-1]'}
 		d['s[t-1]'] = self.db['sGrid']
 		return d
 
@@ -120,6 +104,18 @@ class PEE_A:
 			return pd.Series(0, index = idxnd).add(pd.Series(solp[k], index = self.db['sIdx'])).values
 		else:
 			return pd.DataFrame(0, index = idxnd, columns = self.db['i']).add(pd.DataFrame(solp[k], index = self.db['sIdx'], columns = self.db['i'])).values
+
+	def gridPolicy(self, v, grids = None, kwargs = None):
+		kwargs = self.kwargsInterp | noneInit(kwargs, {})
+		return self.fInterp(noneInit(grids, self.db['sGrid']), v, **kwargs)
+
+	def vectorPolicy(self, sols, y = 'τ', grids = None, kwargs = None):
+		""" Return vector of predicted policies from vector of states; the "0" index is used to make sure that it returns a 1d object, but it requires that we query a single point at a time. """
+		grids = noneInit(grids, self.db['sGrid'])
+		kwargs = self.kwargsInterp | noneInit(kwargs, {})
+		fps = (soli[y] for soli in sols.values())
+		interps = tuple(self.fInterp(grids, fps_i, **kwargs) for fps_i in fps)
+		return lambda x: np.array([interps[i](x[i]) for i in range(len(x))])
 
 	def solve(self, style = 'Vector', t = 't', **kwargs):
 		return getattr(self, f'solve{style}_{t}')(**kwargs)

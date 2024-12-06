@@ -304,7 +304,6 @@ class Model:
 	def getEps(self, coverageRate = 0.7):
 		return coverageRate * (1-self.db['θ'].xs(self.db['t0'])) * (self.simpleβinv()**(5/30)*9.45/14.45+self.simpleβinv()**(10/30)*12.55/22.55)/2
 
-
 	#######################################################################
 	##########				3. Steady state methods 			###########
 	#######################################################################
@@ -516,7 +515,7 @@ class Model:
 		path = self.EE_FH_LOG_solve(sol)
 		η0 = self.B.calib_η0(τ = path['τ'].xs(self.db['t0']), Θh = path['Θh'].xs(self.db['t0']))
 		return np.hstack([path['τ'].xs(self.db['t0'])-self.db['τ0'],
-						  self.B.calib_savingsRate(Θs = path['Θs'].xs(self.db['t0']), Θh = path['Θh'].xs(self.db['t0']))-self.db['s0'],
+						  self.B.calib_savingsRate(s_ = path['s[t-1]'].xs(self.db['t0']), s = path['s'].xs(self.db['t0']), h = path['h'].xs(self.db['t0']))-self.db['s0'],
 						  η0-x[2],
 						  self.B.calib_X0(η0 = η0, Θh = path['Θh'].xs(self.db['t0']))-x[3]])
 
@@ -544,7 +543,7 @@ class Model:
 		PEE = self.EE_FH_PEE_solveRobust(sol, update = update)
 		η0 = self.B.calib_η0(τ = PEE['τ'].xs(self.db['t0']), Θh = PEE['Θh'].xs(self.db['t0']))
 		return np.hstack([PEE['τ'].xs(self.db['t0'])-self.db['τ0'],
-						 self.B.calib_savingsRate(Θs = PEE['Θs'].xs(self.db['t0']), Θh = PEE['Θh'].xs(self.db['t0']))-self.db['s0'],
+						 self.B.calib_savingsRate(s_ = PEE['s[t-1]'].xs(self.db['t0']), s = PEE['s'].xs(self.db['t0']), h = PEE['h'].xs(self.db['t0']))-self.db['s0'],
 						  η0-x[2],
 						  self.B.calib_X0(η0 = η0, Θh = PEE['Θh'].xs(self.db['t0']))-x[3]])
 
@@ -606,7 +605,65 @@ class Model_A(Model):
 		d.update({f'{x}_n': 101 for x in ('τ','θ','eps')})
 		d.update({f'{x}_l': 1e-4 for x in ('τ','θ','eps')})
 		d.update({f'{x}_u': 1-1e-4 for x in ('τ','θ','eps')})
-		d['s_l'] = .001 # stuff and stuff
-		# d['s_u'] = 2 * self.SS_Scalar_solve(0, t = 0)['s'] # set upper bound to 2 times the steady state level with zero taxes (largest possible savings rate)
-		d['s_u'] = 0.05
+		d['s_l'] = 1e-3 # stuff and stuff
+		d['s_u'] = self.SS_Scalar_solve(0, t = 0)['s'] # set upper bound to steady state level with zero taxes (largest possible steady state savings rate)
 		return d
+
+
+	#######################################################################
+	##########				3. Steady state methods 			###########
+	#######################################################################
+
+	def SS_report(self, Bi, Γs, τ, t = None):
+		d = {'Bi': Bi, 'Γs': Γs, 'τ': τ, 's': np.nan_to_num(self.B.steadyState_s(Γs, τ, t = t), nan = 0)}
+		d['h'] = self.BG.backOutH(s = d['s'], Γs = d['Γs'], t = t)
+		d['Θs']= self.BG.backOutΘs(s_ = d['s'], s = d['s'], t = t)
+		return d
+
+	def steadyStatePEE(self, policyFunction, τ0 = None, t = None):
+		""" Identify initial tuple of states """
+		def fixedPointCriteria(τ):
+			ss = self.SS_Scalar_solve(τ, t = t)
+			return τ-np.clip(policyFunction(ss['s']), self.db['τ_l'], self.db['τ_u'])
+		sol = optimize.root(fixedPointCriteria, noneInit(τ0, 0.25))
+		assert sol['success'], f"""Couldn't identify steady state fixed point """
+		return self.SS_Scalar_solve(sol['x'], t = t)
+
+	#######################################################################
+	##########				4. Economic Equilibrium 			###########
+	#######################################################################
+
+	def EE_FH_PEE_solve(self, gridSol, z0 = None, x0 = None, τ0 = None, update = True):
+		policyFunction = self.PEE.vectorPolicy(gridSol)
+		if z0 is None:
+			ss = self.steadyStatePEE(self.PEE.gridPolicy(gridSol[self.db['t'][0]]['τ']), τ0 = τ0, t = self.db['t'][0])
+			z0 = ss['s']
+		sol = optimize.root(lambda x: self.EE_FH_PEE_objective(x, policyFunction, z0), noneInit(x0, self.x0['EE_FH']))
+		assert sol['success'], f""" Could not identify economic equilibrium (self.EE_FH_PEE_solve) with parameter inputs: 
+		state: {z0}"""
+		if update:
+			self.x0['EE_FH'] = sol['x']
+		return self.EE_FH_PEE_report(sol['x'], policyFunction, z0)
+
+	def EE_FH_PEE_objective(self, x, policyFunction, z0):
+		Γs, h, s, s_ = self(x, 'Γs',ns = 'EE_FH'), self(x, 'h',ns='EE_FH'), self(x,'s',ns='EE_FH'), self.FH_sLag(x, z0, ns = 'EE_FH')
+		τ = policyFunction(s_) # evaluate policy
+		τp = self.leadSym(τ) # get leaded version
+		return np.hstack([self.BT.FH_h(s_ = s_, τ = τ, τp = τp, Γs = Γs)-h,
+						  self.BT.FH_s(h = h, Γs = Γs)-s,
+						  self.BT.FH_Γs(s = s, hp = h[1:], τp = τp)-Γs])
+
+	def EE_FH_PEE_report(self, x, policyFunction, z0):
+		d = self.ns['EE_FH'].unloadSol(x)
+		d['EE_FH'] = x
+		d['s[t-1]'] = pd.Series(self.FH_sLag(x, z0, ns = 'EE_FH'), index = self.db['t'])
+		d['τ'] = pd.Series(policyFunction(d['s[t-1]'].values), index = self.db['t'])
+		d['Θh'] = self.BT.FH_BackOutΘh(s_ = d['s[t-1]'], h = d['h'])
+		d['Θs'] = self.BT.FH_BackOutΘs(s_ = d['s[t-1]'], s = d['s'])
+		return d
+
+	#######################################################################
+	##########				6. Calibration methods	 			###########
+	#######################################################################
+
+	

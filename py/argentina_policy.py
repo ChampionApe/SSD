@@ -1,5 +1,6 @@
 import numpy as np, pandas as pd
 from scipy import optimize, interpolate
+from auxFunctions import customLinInterp
 from pyDbs import is_iterable, adj
 import warnings
 warnings.simplefilter(action = "ignore", category = FutureWarning)
@@ -12,7 +13,7 @@ def noneInit(x, fallBackValue):
 def aux_soli(sol, i):
 	sol_i = {k: sol[k][i] if (k != 'Bi') and is_iterable(sol[k]) else sol[k] for k in sol}
 	if 'Bi' in sol:
-		sol_i['Bi'] = sol['Bi'][i:i+1,:]
+		sol_i['Bi'] = sol['Bi'][i,:]
 	return sol_i
 
 def x0_solp(x0, solp, x0_from_solp):
@@ -20,22 +21,6 @@ def x0_solp(x0, solp, x0_from_solp):
 
 def inverseInterp1d(x1, x2, y1, y2):
 	return x1+y1*(x2-x1)/(y1-y2)
-
-def customInterp2d(x, xp, fp):
-	xb = np.clip(x, min(xp)+np.finfo(float).eps, max(xp))
-	j = np.searchsorted(xp, xb, side = 'left') - 1
-	d = ((x-xp[j])/(xp[j+1]-xp[j]))[:,None]
-	return (1-d)*fp[j,:] + d * fp[j+1,:]
-
-def customLinIntp(x, y, **kwargs):
-	return lambda z: np.interp(z,x,y, **kwargs)
-
-def interpSol(x, xp, fp):
-	""" linear interpolation where x, xp are 1d vectors and fp may be 1d or 2d (simply repeats interpolation over the 2d)"""
-	if fp.ndim == 1:
-		return np.interp(x,xp,fp)
-	else:
-		return np.vstack([np.interp(x,xp,fp[:,i]) for i in range(fp.shape[1])]).T
 
 def cartesianGrids(grids1d):
 	""" grids1d = dict of grids. """
@@ -54,12 +39,13 @@ class LOG:
 	def __init__(self, m):
 		self.m = m
 		self.BG = m.BG # requires gridded solutions
+		self.B = m.B
 		self.db = m.db
 		self.x0 = self.defaultInitials
 		self.kwargs_T = {'style': 'Vector', 'method': 'hybr', 'options': None}
 		self.kwargs_T_ = {'style': 'Vector', 'method': 'hybr', 'options': None, 'x0_from_solp': False}
 		self.kwargs_t = {'style': 'Vector', 'method': 'hybr', 'options': None, 'x0_from_solp': True}
-		self.fInterp = customLinIntp
+		self.fInterp = customLinInterp
 		self.kwargsInterp = {}
 		# self.fInterp = interpolate.PchipInterpolator
 		# self.kwargsInterp = {'extrapolate': True}
@@ -88,24 +74,17 @@ class LOG:
 				self.x0[t] = sols[t]['x_unbounded']
 		return sols
 
+	def gridPolicy(self, v, grids = None, kwargs = None):
+		kwargs = self.kwargsInterp | noneInit(kwargs, {})
+		return self.fInterp(noneInit(grids, self.db['s0Grid']), v, **kwargs)
+
 	def vectorPolicy(self, sols, y = 'τ', grids = None, kwargs = None):
 		""" Return vector of predicted policies from vector of states; the "0" index is used to make sure that it returns a 1d object, but it requires that we query a single point at a time. """
-		d = {t: sols[self.db['t'][t]][y] for t in range(self.m.T)}
-		kwargs = self.kwargsInterp | noneInit(kwargs, {})
 		grids = noneInit(grids, self.db['s0Grid'])
-		return lambda x: np.array([self.fInterp(grids, d[t], **kwargs)(x[t]) for t in range(self.m.T)])
-
-	def gridPolicy(self, v, grids = None, kwargs = None):
-		return self.gridPolicy1d(v, noneInit(grids, self.db['s0Grid']), kwargs = kwargs) if v.ndim == 1 else self.gridPolicy2d(v, noneInit(grids, self.db['s0Grid']), kwargs = kwargs)
-
-	def gridPolicy1d(self, v, grids, kwargs = None):
 		kwargs = self.kwargsInterp | noneInit(kwargs, {})
-		return self.fInterp(grids, v, **kwargs)
-
-	def gridPolicy2d(self, v, grids, kwargs = None):
-		ite = tuple(v[:,i] for i in range(v.shape[1])) 
-		kwargs = self.kwargsInterp | noneInit(kwargs, {})
-		return lambda x: np.vstack([self.fInterp(grids,vi, **kwargs)(x) for vi in ite]).T
+		fps = (soli[y] for soli in sols.values())
+		interps = tuple(self.fInterp(grids, fps_i, **kwargs) for fps_i in fps)
+		return lambda x: np.array([interps[i](x[i]) for i in range(len(x))])
 
 	def solve(self, style = 'Vector', t = 't', **kwargs):
 		return getattr(self, f'solve{style}_{t}')(**kwargs)
@@ -193,12 +172,14 @@ class PEE:
 	def __init__(self, m):
 		self.m = m
 		self.BG = m.BG # requires gridded solutions
+		self.B = m.B
 		self.db = m.db
 		self.x0 = self.defaultInitials
 		self.kwargs_T =  {'style': 'Vector', 'method': 'krylov', 'options': {'maxiter': 100}}
 		self.kwargs_T_ = {'style': 'Vector', 'method': 'krylov', 'options': {'maxiter': 100}, 'x0_from_solp': False}
 		self.kwargs_t =  {'style': 'Vector', 'method': 'krylov', 'options': {'maxiter': 100}, 'x0_from_solp': True}
-		self.kwargsInterp = {'method': 'linear', 'bounds_error': False, 'fill_value': None}
+		self.fInterp = interpolate.RegularGridInterpolator
+		self.kwargsInterp = {'method': 'quintic', 'bounds_error': False, 'fill_value': None}
 
 	def interpInitialsFromSols(self, sols, idx, grids):
 		queryCurrentGrid = np.vstack([self.db['sGrid_ss0'].values, self.db['s0Grid_ss0'].values]).T
@@ -242,13 +223,25 @@ class PEE:
 	def gridPolicy1d(self, v, idx, grids, kwargs = None):
 		vals = pd.Series(v, index = idx).unstack('s0Idx').values
 		kwargs = self.kwargsInterp | noneInit(kwargs, {})
-		return lambda x: interpolate.interpn(grids, vals, x, **kwargs)
+		return self.fInterp(grids, vals, **kwargs)
 
 	def gridPolicy2d(self, v, idx, grids, kwargs = None):
 		""" Repeat and stack columns """
-		ite = tuple(pd.Series(v[:,i], index = idx).unstack('s0Idx').values for i in range(v.shape[1])) 
+		ite = tuple(pd.Series(v[:,i], index = idx).unstack('s0Idx').values for i in range(v.shape[1]))
 		kwargs = self.kwargsInterp | noneInit(kwargs, {})
-		return lambda x: np.vstack([interpolate.interpn(grids, vi, x, **kwargs) for vi in ite]).T
+		interps = tuple(self.fInterp(grids, vi, **kwargs) for vi in ite)
+		return lambda x: np.vstack([interps_i(x) for interps_i in interps]).T
+
+	# def gridPolicy1d(self, v, idx, grids, kwargs = None):
+	# 	vals = pd.Series(v, index = idx).unstack('s0Idx').values
+	# 	kwargs = self.kwargsInterp | noneInit(kwargs, {})
+	# 	return lambda x: interpolate.interpn(grids, vals, x, **kwargs)
+
+	# def gridPolicy2d(self, v, idx, grids, kwargs = None):
+	# 	""" Repeat and stack columns """
+	# 	ite = tuple(pd.Series(v[:,i], index = idx).unstack('s0Idx').values for i in range(v.shape[1])) 
+	# 	kwargs = self.kwargsInterp | noneInit(kwargs, {})
+	# 	return lambda x: np.vstack([interpolate.interpn(grids, vi, x, **kwargs) for vi in ite]).T
 
 	def vectorPolicy(self, sols, y = 'τ', idx = None, grids = None, kwargs = None):
 		""" Return vector of predicted policies from vector of states; the "0" index is used to make sure that it returns a 1d object, but it requires that we query a single point at a time. """
@@ -263,47 +256,80 @@ class PEE:
 	def solveVector_t(self, solp = None, x0_from_solp = False, x0 = None, method = 'krylov', options = None, **kwargs):
 		""" Solve problem as a sequence of root-finding problems. """
 		fp = {k: self.gridPolicy(solp[k]) for k in ('τ','Bi','B0', '∂ln(h)/∂τ', '∂ln(h)/∂ln(s[t-1])', 'dτ/ds[t-1]','dτ/d(s0/s)','dln(h)/dln(s[t-1])')} # dict interpolants
-		x = optimize.root(lambda x: self.objective_t(x, fp), x0_solp(x0, solp['x_unbounded'], x0_from_solp), method = method, options = options)
+		sol = self.precomputations_t(solp)
+		x = optimize.root(lambda x: self.objectiveVector_t(x, sol, fp), x0_solp(x0, solp['x_unbounded'], x0_from_solp), method = method, options = options)
 		assert x['success'], f""" Couldn't identify policy function for year t={self.BG.t}. Previous solution x = {solp['x_unbounded']}. """
-		return self.reportVector_t(x['x'], fp)
+		return self.reportVector_t(x['x'], sol, fp)
 
-	def objective_t(self, x, fp):
-		sol, solp = self.funcOfτ_t(x ,fp)
-		PEEobj = self.BG.PEE_t(τBound = sol['τ'], τ  = sol['τ_unbounded'], τp = solp['τ'], s_ = sol['s[t-1]'], h = sol['h'], Γs = solp['Γs'], Bip = solp['Bi'], B0p = solp['B0'], si_s = sol['si/s'], s0_s = sol['s0/s[t-1]'], Θs = sol['Θs'],
+	def solveScalarLoop_t(self, solp = None, x0_from_solp = False, x0_from_loop = True, x0 = None, method = 'hybr', options = None, **kwargs):
+		""" Solve problem by looping through root-finding problems """
+		fp = {k: self.gridPolicy(solp[k]) for k in ('τ','Bi','B0', '∂ln(h)/∂τ', '∂ln(h)/∂ln(s[t-1])', 'dτ/ds[t-1]','dτ/d(s0/s)','dln(h)/dln(s[t-1])')}
+		sol = self.precomputations_t(solp)
+		x = np.empty((self.m.ns0, self.m.ngrid), dtype = object)
+		x0, x0solp = x0.reshape(3, self.m.nss0grid).T, solp['x_unbounded'].reshape(3, self.m.nss0grid).T
+		x[0,0] = optimize.root(lambda x: self.objectiveScalarLoop_t(x, aux_soli(sol,0),fp), x0 = x0[0], method = method, options = options)
+		for i in range(1,self.m.nss0grid):
+			soli = aux_soli(sol,i)
+			j,jj = self.db['ss0Idx'][i]
+			if jj == 0:
+				x0i = x[j-1,0]['x'] if x0_from_loop else x0[i]
+			else:
+				x0i = x[j,jj-1]['x'] if x0_from_loop else x0[i]
+			x[j,jj] = optimize.root(lambda x: self.objectiveScalarLoop_t(x, soli, fp), x0i, method = method, options = options)
+		assert all((xi['success'] for xi in x.reshape(-1))), """Couldn't identify policy function in t={self.B.t}"""
+		return self.reportVector_t(np.vstack([xi['x']for xi in x.reshape(-1)]).T.reshape(-1), sol, fp)
+
+	def precomputations_t(self, solp):
+		return {'s[t-1]': self.db['sGrid_ss0'].values, 's0/s[t-1]': self.db['s0Grid_ss0'].values}
+
+	def _objective_t(self, sol, solp, base):
+		PEEobj = base.PEE_t(τBound = sol['τ'], τ  = sol['τ_unbounded'], τp = solp['τ'], s_ = sol['s[t-1]'], h = sol['h'], Γs = solp['Γs'], Bip = solp['Bi'], B0p = solp['B0'], si_s = sol['si/s'], s0_s = sol['s0/s[t-1]'], Θs = sol['Θs'],
 						dlnh_Dτ = sol['dln(h)/dτ'], dlns_Dτ = sol['dln(s)/dτ'], dlnΓs_Dτ = sol['dln(Γs)/dτ'], dlnhp_Dlns = solp['dln(h)/dln(s[t-1])'], dτp_dτ = sol['dτ[t+1]/dτ'])
 		return np.hstack([PEEobj, 
-						sol['s']-self.BG.s_t(h=sol['h'], Γs = sol['Γs']),
-						sol['s0/s']-self.BG.s0_s(B0 = solp['B0'], Θs = sol['Θs'], τp = solp['τ'])])
+						sol['s']-base.s_t(h=sol['h'], Γs = sol['Γs']),
+						sol['s0/s']-base.s0_s(B0 = solp['B0'], Θs = sol['Θs'], τp = solp['τ'])])
 
-	def funcOfτ_t(self, x, fp):
-		sol = {	'τ_unbounded': self.m.ns['PEEpol'](x, 'τ'), 's': self.m.ns['PEEpol'](x, 's'), 's0/s': self.m.ns['PEEpol'](x, 's0/s'),
-				's[t-1]': self.db['sGrid_ss0'].values, 's0/s[t-1]': self.db['s0Grid_ss0'].values}
+	def objectiveVector_t(self, x, sol, fp):
+		sol, solp = self.funcOfτVector_t(x, sol, fp)
+		return self._objective_t(sol, solp, self.BG)
+	def objectiveScalarLoop_t(self, x, sol, fp):
+		sol, solp = self.funcOfτScalarLoop_t(x, sol, fp)
+		return self._objective_t(sol, solp, self.B)
+
+	def _funcOfτ_t(self, s, s0_s, τ, sol, fp, base):
+		sol.update({'τ_unbounded': τ, 's': s, 's0/s': s0_s})
 		sol['s'] = np.clip(sol['s'], 1e-6, None)
 		sol['τ'] = np.clip(sol['τ_unbounded'], self.db['τ_l'], self.db['τ_u']) 
-		z0 = np.vstack([sol['s'], sol['s0/s']]).T # vector of states to pass to interpolators 
+		z0 = np.vstack([sol['s'], sol['s0/s']]).T # vector of states to pass to interpolators
+		if base == self.B:
+			z0 = z0[0]
 		solp = {k: v(z0) for k,v in fp.items()} # query t+1 solution
-		solp['Γs'] = self.BG.Γs(Bi = solp['Bi'], τp = solp['τ'])
-		sol['Θh']	= self.BG.Θh_t(τ = sol['τ'], τp = solp['τ'], Γs = solp['Γs'])
-		sol['h']	= self.BG.hFromΘh_t(s_ = sol['s[t-1]'], Θh = sol['Θh'])
-		sol['Θs'] = self.BG.Θs_t(Θh = sol['Θh'], Γs = solp['Γs'])
-		# sol['Θs']	= self.BG.backOutΘs(s_ = sol['s[t-1]'], s = sol['s'])
-		return self.getAuxVars_t(sol, solp), solp
+		solp['Γs'] = base.Γs(Bi = solp['Bi'], τp = solp['τ'])
+		sol['Θh']	= base.Θh_t(τ = sol['τ'], τp = solp['τ'], Γs = solp['Γs'])
+		sol['h']	= base.hFromΘh_t(s_ = sol['s[t-1]'], Θh = sol['Θh'])
+		sol['Θs'] = base.Θs_t(Θh = sol['Θh'], Γs = solp['Γs'])
+		# sol['Θs']	= base.backOutΘs(s_ = sol['s[t-1]'], s = sol['s'])
+		return self.getAuxVars_t(sol, solp, base), solp
+	def funcOfτVector_t(self, x, sol, fp):
+		return self._funcOfτ_t(self.m.ns['PEEpol'](x, 's'), self.m.ns['PEEpol'](x, 's0/s'), self.m.ns['PEEpol'](x, 'τ'), sol, fp, self.BG)
+	def funcOfτScalarLoop_t(self, x, sol, fp):
+		return self._funcOfτ_t(x[0], x[1], x[2], sol, fp, self.B)
 
-	def getAuxVars_t(self, sol, solp):
-		sol['Bi']	= self.BG.Bi(s_ = sol['s[t-1]'], h = sol['h'])
-		sol['B0']	= self.BG.B0(s_ = sol['s[t-1]'], h = sol['h'])
-		sol['Γs']	= self.BG.Γs(Bi = sol['Bi'], τp = sol['τ'])
-		sol['si/s']	= self.BG.si_s(Bi = sol['Bi'], Γs = sol['Γs'], τp = sol['τ'])
-		sol['Ω']	= self.BG.Ω(Γs = solp['Γs'], τp = solp['τ'])
-		sol['Ψ']	= self.BG.Ψ(Bip = solp['Bi'], τp = solp['τ'])
-		sol['σ']	= self.BG.σ(Ω = sol['Ω'], Ψ = sol['Ψ'], dlnhp_dlns = solp['∂ln(h)/∂ln(s[t-1])'], τp = solp['τ'])
-		sol.update(self.BG.EELaggedDerivatives(Ω = sol['Ω'], Ψ = sol['Ψ'], Bip = solp['Bi'], dlnhp_dτp = solp['∂ln(h)/∂τ'], τp = solp['τ'], B0p = solp['B0'], Θs = sol['Θs']))
-		sol.update(self.BG.EEDerivatives(Ψ = sol['Ψ'], σ = sol['σ'], dlnhp_dlns = solp['∂ln(h)/∂ln(s[t-1])'], τ = sol['τ'], τp = solp['τ'], B0p = solp['B0'], Θs = sol['Θs']))
+	def getAuxVars_t(self, sol, solp, base):
+		sol['Bi']	= base.Bi(s_ = sol['s[t-1]'], h = sol['h'])
+		sol['B0']	= base.B0(s_ = sol['s[t-1]'], h = sol['h'])
+		sol['Γs']	= base.Γs(Bi = sol['Bi'], τp = sol['τ'])
+		sol['si/s']	= base.si_s(Bi = sol['Bi'], Γs = sol['Γs'], τp = sol['τ'])
+		sol['Ω']	= base.Ω(Γs = solp['Γs'], τp = solp['τ'])
+		sol['Ψ']	= base.Ψ(Bip = solp['Bi'], τp = solp['τ'])
+		sol['σ']	= base.σ(Ω = sol['Ω'], Ψ = sol['Ψ'], dlnhp_dlns = solp['∂ln(h)/∂ln(s[t-1])'], τp = solp['τ'])
+		sol.update(base.EELaggedDerivatives(Ω = sol['Ω'], Ψ = sol['Ψ'], Bip = solp['Bi'], dlnhp_dτp = solp['∂ln(h)/∂τ'], τp = solp['τ'], B0p = solp['B0'], Θs = sol['Θs']))
+		sol.update(base.EEDerivatives(Ψ = sol['Ψ'], σ = sol['σ'], dlnhp_dlns = solp['∂ln(h)/∂ln(s[t-1])'], τ = sol['τ'], τp = solp['τ'], B0p = solp['B0'], Θs = sol['Θs']))
 		sol.update(self.auxStrategicEffects(sol, solp))
 		return sol
 
-	def reportVector_t(self, x, fp):
-		sol, solp = self.funcOfτ_t(x ,fp)
+	def reportVector_t(self, x, sol, fp):
+		sol, solp = self.funcOfτVector_t(x, sol ,fp)
 		sol['x_unbounded'] = x
 		sol.update(self.getGriddedGradients(sol))
 		sol['∂ln(h)/∂ln(s[t-1])'] = self.BG.recursive_dlnh_dlns_(Ψ = sol['Ψ'], σ = sol['σ'], dlnhp_dlns = solp['∂ln(h)/∂ln(s[t-1])'])
@@ -327,29 +353,53 @@ class PEE:
 	### TERMINAL STATE FUNCTIONS
 	def solveVector_T(self, x0 = None, method = 'krylov', options = None, **kwargs):
 		sol = self.precomputations_T(self.db['sGrid_ss0'].values, self.db['s0Grid_ss0'].values)
-		x = optimize.root(lambda τ: self.objective_T(τ, sol), x0, method = method, options = options)
+		x = optimize.root(lambda τ: self.objectiveVector_T(τ, sol), x0, method = method, options = options)
 		assert x['success'], f""" Could not identify PEE solution (self.solveVector_T)"""
 		return self.report_T(x['x'], sol)
+
+	def solveScalarLoop_T(self, x0 = None, method = 'hybr', options = None, x0_from_loop = True, **kwargs):
+		sol = self.precomputations_T(self.db['sGrid_ss0'].values, self.db['s0Grid_ss0'].values)
+		x = np.empty((self.m.ns0, self.m.ngrid), dtype = object)
+		soli = aux_soli(sol,0)
+		x[0,0] = optimize.root(lambda τ: self.objectiveScalar_T(τ, soli), x0 = x0[0], method = method, options = options)
+		for i in range(1,self.m.nss0grid):
+			soli = aux_soli(sol,i)
+			j,jj = self.db['ss0Idx'][i]
+			if jj == 0:
+				x0i = x[j-1,0]['x'] if x0_from_loop else x0[i]
+			else:
+				x0i = x[j,jj-1]['x'] if x0_from_loop else x0[i]
+			x[j,jj] = optimize.root(lambda τ: self.objectiveScalar_T(τ, soli), x0i, method = method, options = options)
+		assert all((xi['success'] for xi in x.reshape(-1))), """Couldn't identify policy function in terminal state"""
+		return self.report_T(np.array([xi['x'][0] for xi in x.reshape(-1)]), sol)
 
 	def precomputations_T(self, sidx, s0idx):
 		return {'s' : np.zeros(len(sidx)), 's0/s': np.zeros(len(sidx)), 's[t-1]': sidx, 's0/s[t-1]': s0idx}
 
-	def objective_T(self, τ, sol):
+	def _objective_T(self, τ, sol, base):
 		τBound = np.clip(τ, self.db['τ_l'], self.db['τ_u'])
-		funcOfτ = self.funcOfτ_T(τBound, sol)
-		return self.BG.PEE_T(τBound = τBound, τ = τ, s_ = sol['s[t-1]'], h = funcOfτ['h'], dlnh_Dτ = funcOfτ['∂ln(h)/∂τ'], si_s = funcOfτ['si/s'], s0_s = sol['s0/s[t-1]'])
+		funcOfτ = self._funcOfτ_T(τBound, sol, base)
+		return base.PEE_T(τBound = τBound, τ = τ, s_ = sol['s[t-1]'], h = funcOfτ['h'], dlnh_Dτ = funcOfτ['∂ln(h)/∂τ'], si_s = funcOfτ['si/s'], s0_s = sol['s0/s[t-1]'])
+	def objectiveVector_T(self, τ, sol):
+		return self._objective_T(τ, sol, self.BG)
+	def objectiveScalar_T(self, τ, sol):
+		return self._objective_T(τ, sol, self.B)
 
-	def funcOfτ_T(self, τ, sol):
-		funcOfτ = {'∂ln(h)/∂τ': self.BG.dlnh_Dτ_T(τ), 'h': self.BG.h_T(s_ = sol['s[t-1]'], τ = τ)}
-		funcOfτ['Bi'] = self.BG.Bi(s_ = sol['s[t-1]'], h = funcOfτ['h'])
-		funcOfτ['Γs'] = self.BG.Γs(Bi = funcOfτ['Bi'], τp = τ)
-		funcOfτ['si/s'] = self.BG.si_s(Bi = funcOfτ['Bi'], Γs = funcOfτ['Γs'], τp = τ)
+	def _funcOfτ_T(self, τ, sol, base):
+		funcOfτ = {'∂ln(h)/∂τ': base.dlnh_Dτ_T(τ), 'h': base.h_T(s_ = sol['s[t-1]'], τ = τ)}
+		funcOfτ['Bi'] = base.Bi(s_ = sol['s[t-1]'], h = funcOfτ['h'])
+		funcOfτ['Γs'] = base.Γs(Bi = funcOfτ['Bi'], τp = τ)
+		funcOfτ['si/s'] = base.si_s(Bi = funcOfτ['Bi'], Γs = funcOfτ['Γs'], τp = τ)
 		return funcOfτ
+	def funcOfτVector_T(self, τ, sol):
+		return self._funcOfτ_T(τ, sol, self.BG)
+	def funcOfτScalar_T(self, τ, sol):
+		return self._funcOfτ_T(τ, sol, self.B)
 
 	def report_T(self, τ, sol):
 		sol['τ'] = np.clip(τ, self.db['τ_l'], self.db['τ_u'])
 		sol['τ_unbounded'] = τ
-		sol.update(self.funcOfτ_T(sol['τ'], sol))
+		sol.update(self.funcOfτVector_T(sol['τ'], sol))
 		sol.update(self.getGriddedGradients(sol))
 		sol['∂ln(h)/∂ln(s[t-1])'] = np.full(τ.shape, self.BG.power_h())
 		sol['B0'] = self.BG.B0(s_ = sol['s[t-1]'], h = sol['h'])
@@ -360,10 +410,8 @@ class PEE:
 	def getGriddedGradients(self, sol):
 		s = pd.Series(sol['τ'], index = self.db['ss0Idx']).unstack('sIdx')
 		h = pd.Series(sol['h'], index = self.db['ss0Idx']).unstack('sIdx')
-		grdnt = np.gradient(s.values, self.db['s0Grid'], self.db['sGrid'], edge_order =2)
-		grdnt_h = np.gradient(h.values, self.db['s0Grid'], self.db['sGrid'], edge_order =2)
-		return {'dτ/ds[t-1]': pd.DataFrame(grdnt[1], index = s.index, columns = s.columns).stack().values, 
-			    'dτ/d(s0/s)': pd.DataFrame(grdnt[0], index = s.index, columns = s.columns).stack().values,
-			    'dln(h)/dln(s[t-1])': pd.DataFrame(grdnt_h[1], index = h.index, columns = h.columns).stack().values * sol['s[t-1]'] /sol['h']}
-
-
+		grdnt = np.gradient(s.values, self.db['s0Grid'], self.db['sGrid'], edge_order =1)
+		grdnt_h = np.gradient(np.log(h.values), self.db['s0Grid'], np.log(self.db['sGrid']), edge_order = 1)
+		return {'dτ/ds[t-1]': grdnt[1].reshape(-1), 
+			    'dτ/d(s0/s)': grdnt[0].reshape(-1),
+			    'dln(h)/dln(s[t-1])': grdnt_h[1].reshape(-1)}
