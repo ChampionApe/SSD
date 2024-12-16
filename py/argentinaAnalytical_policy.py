@@ -36,19 +36,138 @@ def defaultGrid(k, db):
 	return defaultGrid_(db[f'{k}_n'], db[f'{k}_l'], db[f'{k}_u'], db[f'k{k}_l'], db[f'k{k}_u'])
 
 class LOG_A:
-	def __init__(self, m):
+	def __init__(self, m, kwargsMain = None):
 		self.m = m
-		self.BG = m.BG # requires gridded solutions
+		self.BG = m.BG
+		self.BTG = m.BTG # requires gridded solutions
 		self.BT = m.BT # 
 		self.db = m.db
 		self.x0 = self.defaultInitials
+		self.kwargsMain = self.defaultKwargs | noneInit(kwargsMain, {})
+		self.main = m.main # what method is used in __call__ method.
+
+	def __call__(self, main = None):
+		method = noneInit(main, self.main)
+		return getattr(self, f'f_{method}')()
+
+	def f_FH(self, **kwargs):
+		return self.solve(**(self.kwargsMain['FH'] | noneInit(kwargs, {})))
 
 	@property
 	def defaultInitials(self):
 		return np.full(self.m.T, .2)
 
+	@property
+	def defaultKwargs(self):
+		return {'FH': {'style': 'Vector'}}
+
+	def solve(self, style = 'Vector', **kwargs):
+		return getattr(self, f'solve{style}')(**kwargs)
+
+	def solveRobust(self, grid = None, **kwargs):
+		""" Solve with grid-search, then with vector """
+		self.solveGridSC(grid = None, update = True)
+		return self.solveVector(**kwargs)
+
+	def solveVector(self, x0 = None, update = True, **kwargs):
+		sol = optimize.root(lambda τ: self.objectiveVector(τ), noneInit(x0, self.x0), **kwargs)
+		assert sol['success'], f""" Couldn't identify PEE in LOG.solveVector"""
+		return self.report(sol['x'], update = update)
+
+	def solveApproxGridSC(self, grid = None, update = True, **kwargs):
+		"""  NOTE: This is a steady state approximation """
+		if grid is None:
+			grid = np.tile(self.db['τGrid'][:,None], self.m.T).T
+		τ = self.interpGridSolFromSC(grid.T, self.objectiveApproxGridSC(grid).T)
+		return self.report(τ, update = update)
+
+	def solveGridSC(self, grid = None, update = True, **kwargs):
+		if grid is None:
+			grid = self.db['τGrid']
+		sols = dict.fromkeys(self.db['t'])
+		t = self.db['t'][-1]
+		self.BG.t = t
+		sols[t] = self.solveGridSC_T(grid)
+		for t in self.db['t'][-2::-1]:
+			self.BG.t = t
+			sols[t] = self.solveGridSC_t(grid, sols[t+1])
+		return self.report(np.array([soli['τ_unbounded'][0] for soli in sols.values()]), update = update)
+
+	def solveGridSC_T(self, grid):
+		sol = self.funcOfτGridSC_T(grid)
+		τ = self.interpGridSolFromSC_1d(grid, self.objectiveGridSC_T(grid))
+		sol = {'τ_unbounded': τ, 'τ': np.clip(τ, self.db['τ_l'], self.db['τ_u'])}
+		sol['Γs'] = self.BG.Γs(Bi = self.BG.get('βi[t-1]'), τp = sol['τ'])
+		return sol
+
+	def solveGridSC_t(self, grid, solp):
+		sol = self.funcOfτGridSC_t(grid, solp)
+		τ = self.interpGridSolFromSC_1d(grid, self.objectiveGridSC_t(grid, solp))
+		sol = {'τ_unbounded': τ, 'τ': np.clip(τ, self.db['τ_l'], self.db['τ_u'])}
+		sol['Γs'] = self.BG.Γs(Bi = self.BG.get('βi[t-1]'), τp = sol['τ'])
+		return sol
+
+	def interpGridSolFromSC_1d(self, τ, o):
+		""" Assumes a single crossing"""
+		changeSign = np.diff(np.sign(o), axis = 0) < 0
+		return inverseInterp1d(τ[:-1][changeSign], τ[1:][changeSign], o[:-1][changeSign], o[1:][changeSign])
+
+	def interpGridSolFromSC(self, τ, o):
+		""" Assumes a single crossing. 
+		Note that when numpy slices a 2d array in a way that results in a 1d vector, 
+		it "sorts" after matches in the row-direction first. """
+		changeSign = np.diff(np.sign(o), axis = 0) < 0
+		return inverseInterp1d(τ[:-1].T[changeSign.T], τ[1:].T[changeSign.T], o[:-1].T[changeSign.T], o[1:].T[changeSign.T])
+
+	def report(self, τ, update = True):
+		sol = self.funcOfτVector(τ)
+		if update:
+			self.x0 = sol['τ_unbounded']
+		return sol
+	def objectiveVector(self, τ):
+		sol = self.funcOfτVector(τ)
+		return self.BT.FH_LOG_PEE(τBound = sol['τ'], τ = sol['τ_unbounded'], si_s = sol['si/s'], Θh = sol['Θh'], dlnh_Dτ = sol['dlnh_Dτ'])
+	def objectiveApproxGridSC(self, τ):
+		sol = self.funcOfτApproxGridSC(τ)
+		return self.BTG.FH_LOG_PEE(τBound = sol['τ'], τ = sol['τ_unbounded'], si_s = sol['si/s'], Θh = sol['Θh'], dlnh_Dτ = sol['dlnh_Dτ'])
+	def objectiveGridSC_t(self, τ, solp):
+		sol = self.funcOfτGridSC_t(τ, solp)
+		return self.BG.LOG_PEE_t(τBound = sol['τ'], τ = sol['τ_unbounded'], si_s = sol['si/s'], Θh = sol['Θh'], dlnh_Dτ = sol['dlnh_Dτ'])
+	def objectiveGridSC_T(self, τ):
+		sol = self.funcOfτGridSC_T(τ)
+		return self.BG.LOG_PEE_T(τBound = sol['τ'], τ = sol['τ_unbounded'], si_s = sol['si/s'], Θh = sol['Θh'], dlnh_Dτ = sol['dlnh_Dτ'])
+
+	def _funcOfτ(self, τ, Bi, base):
+		sol = {'τ_unbounded': τ, 'τ': np.clip(τ, self.db['τ_l'], self.db['τ_u'])}
+		sol['τ[t+1]'] = self.m.leadSym(sol['τ'])
+		sol['dlnh_Dτ'] = base.LOG_dlnh_Dτ(τ=sol['τ'])
+		sol['Γs[t-1]'] = base.FH_LOG_ΓsLagged(τ = sol['τ'])
+		sol['Θh'] = base.FH_LOG_Θh(τ = sol['τ'], τp = sol['τ[t+1]'], Γs = sol['Γs[t-1]'][1:])
+		sol['si/s'] = base.si_s(Bi = Bi, Γs = sol['Γs[t-1]'], τp = sol['τ'])
+		return sol
+	def funcOfτVector(self, τ):
+		return self._funcOfτ(τ, self.BT.get('βi[t-1]'), self.BT)
+	def funcOfτApproxGridSC(self, τ):
+		return self._funcOfτ(τ, self.BTG.get('βi[t-1]')[:,None,:], self.BTG)		
+	def funcOfτGridSC_t(self, τ, solp):
+		""" τp is a scalar - τ is a vector over a grid """
+		sol = {'τ_unbounded': τ, 'τ': np.clip(τ, self.db['τ_l'], self.db['τ_u'])}
+		sol['dlnh_Dτ'] = self.BG.LOG_dlnh_Dτ(τ = sol['τ'])
+		sol['Γs'] = self.BG.Γs(Bi = self.BG.get('βi[t-1]'), τp = sol['τ'])
+		sol['Θh'] = self.BG.Θh_t(τ = sol['τ'], τp = solp['τ'], Γs = solp['Γs'])
+		sol['si/s'] = self.BG.si_s(Bi = self.BG.get('βi[t-1]')[None,:], Γs = sol['Γs'], τp = sol['τ'])
+		return sol
+	def funcOfτGridSC_T(self, τ):
+		sol = {'τ_unbounded': τ, 'τ': np.clip(τ, self.db['τ_l'], self.db['τ_u'])}
+		sol['dlnh_Dτ'] = self.BG.LOG_dlnh_Dτ(τ = sol['τ'])
+		sol['Γs'] = self.BG.Γs(Bi = self.BG.get('βi[t-1]'), τp = sol['τ'])
+		sol['Θh'] = self.BG.Θh_T(τ = sol['τ'])
+		sol['si/s'] = self.BG.si_s(Bi = self.BG.get('βi[t-1]')[None,:], Γs = sol['Γs'], τp = sol['τ'])
+		return sol
+
+
 class PEE_A:
-	def __init__(self, m):
+	def __init__(self, m, kwargsMain = None):
 		self.m = m
 		self.BG = m.BG # requires gridded solutions
 		self.db = m.db
@@ -58,20 +177,31 @@ class PEE_A:
 		self.kwargs_t = {'style': 'Vector', 'method': 'krylov', 'options': None, 'x0_from_solp': True}
 		self.fInterp = customLinInterp
 		self.kwargsInterp = {}
+		self.kwargsMain = self.defaultKwargs | noneInit(kwargsMain, {})
+		self.main = m.main # what method is used in __call__ method.
 		# self.fInterp = interpolate.PchipInterpolator
 		# self.kwargsInterp = {'extrapolate': True}
+
+	def __call__(self, main = None):
+		method = noneInit(main, self.main)
+		return getattr(self, f'f_{method}')()
+
+	@property
+	def defaultKwargs(self):
+		return {'FH': dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.db['t'][-2]: self.kwargs_T_, self.db['t'][-1]: self.kwargs_T}}
 
 	@property
 	def defaultInitials(self):
 		return dict.fromkeys(self.db['t'], np.full(self.m.ngrid, .2))
 
-	@property
-	def FH_kwargs(self):
-		return dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.db['t'][-2]: self.kwargs_T_, self.db['t'][-1]: self.kwargs_T}
+	def interpInitialsFromLOG(self, path):
+		""" Get self.x0 dictionary from log solution """
+		[self.x0.__setitem__(self.db['t'][t], np.full(self.m.ngrid, path['τ_unbounded'][t])) for t in range(len(self.db['t']))];
 
-	def FH(self, pars = None, update = True):
+
+	def f_FH(self, update = True, **kwargs):
 		""" Return dict of policy functions. If kwargs are passed, this should be a dict of kwargs for each t. """
-		kwargs = noneInit(pars, self.FH_kwargs)
+		kwargs = self.kwargsMain['FH'] | noneInit(kwargs, {})
 		sols = dict.fromkeys(self.db['t'])
 		t = self.db['t'][-1]
 		self.BG.t = t
@@ -123,7 +253,19 @@ class PEE_A:
 	def solveRobust_t(self, solp = None, **kwargs):
 		""" Use grid-search to get x0 """
 		gridSol = self.solveGridSC_t(solp = solp)
-		return self.solveVector_t(x0 = gridSol['τ_unbounded'], **kwargs)
+		return self.solveVector_t(solp = solp, x0 = gridSol['τ_unbounded'], **{k:v for k,v in noneInit(kwargs, {}).items() if k != 'x0'})
+
+	def solveVeryRobust_t(self, solp = None, **kwargs):
+		""" Use vectorized optimization, then gridsearch, retry vectorized optimization or exit with gridsearch result"""
+		try:
+			return self.solveVector_t(solp = solp, **kwargs)
+		except AssertionError:
+			gridSol = self.solveGridSC_t(solp = solp)
+			try:
+				return self.solveVector_t(solp = solp, x0 = gridSol['τ_unbounded'], **{k:v for k,v in noneInit(kwargs, {}).items() if k != 'x0'})
+			except AssertionError:
+				print(f"""Warning: Could only solve with gridsearch.""")
+				return gridSol
 
 	def solveGridSC_t(self, solp = None, **kwargs):
 		solp_nd = {k: self.mapToIdxnd(k, self.db['sτIdx'], solp) for k in solp} # map solp to full grid
@@ -139,7 +281,7 @@ class PEE_A:
 	def objective_t(self, τ, sol, solp):
 		sol = self.funcOfτ_t(τ, sol, solp)
 		return self.BG.PEE_t(τBound = sol['τ'], τ  = sol['τ_unbounded'], τp = solp['τ'], s_ = sol['s[t-1]'], s = sol['s'], h = sol['h'], Γs = solp['Γs'], Bip = sol['Bi'], si_s = sol['si/s'], Θh = sol['Θh'], Θhp = solp['Θh'],
-							dlnh_Dτ = sol['dln(h)/dτ'], dlns_Dτ = sol['dln(s)/dτ'], dlnΓs_Dτ = sol['dln(Γs)/dτ'], dlnhp_Dlns = solp['dln(h)/dln(s[t-1])'], dlnhp_Dτ = sol['dln(h[t+1])/dτ'], dτp_dτ = sol['dτ[t+1]/dτ'])
+							dlnh_Dτ = sol['dln(h)/dτ'], dlns_Dτ = sol['dln(s)/dτ'], dlnΓs_Dτ = sol['dln(Γs)/dτ'], dlnhp_Dlns = solp['dln(h)/dln(s[t-1])'], dlnΘhp_Dτ = sol['dln(Θh[t+1])/dτ'], dτp_dτ = sol['dτ[t+1]/dτ'])
 
 	def precomputations_t(self, solp):
 		sol = { 's': solp['s[t-1]'], 'h': self.BG.backOutH(s = solp['s[t-1]'], Γs = solp['Γs']), 'Ω': self.BG.Ω(Γs = solp['Γs'], τp = solp['τ']), 'Ψ': self.BG.Ψ(Bip = solp['Bi'], τp= solp['τ'])}
@@ -158,7 +300,7 @@ class PEE_A:
 		sol['si/s']	= self.BG.si_s(Bi = sol['Bi'], Γs = sol['Γs'], τp = sol['τ'])
 		sol.update(self.BG.EEDerivatives(Ψ = sol['Ψ'], σ = sol['σ'], dlnhp_dlns = solp['∂ln(h)/∂ln(s[t-1])'], τ = sol['τ'], τp = solp['τ']))
 		sol.update(self.auxStrategicEffects(sol, solp))
-		sol['dln(h[t+1])/dτ'] = (solp['dln(h)/dln(s[t-1])']-self.BG.power_h())*sol['dln(s)/dτ']
+		sol['dln(Θh[t+1])/dτ'] = (solp['dln(h)/dln(s[t-1])']-self.BG.power_h())*sol['dln(s)/dτ']
 		return sol
 
 	def report_t(self, τ, sol, solp):
@@ -179,7 +321,19 @@ class PEE_A:
 	def solveRobust_T(self, **kwargs):
 		""" Use grid-search to get x0 """
 		gridSol = self.solveGridSC_T()
-		return self.solveVector_T(x0 = gridSol['τ_unbounded'], **kwargs)
+		return self.solveVector_T(x0 = gridSol['τ_unbounded'], **{k:v for k,v in noneInit(kwargs, {}).items() if k != 'x0'})
+
+	def solveVeryRobust_T(self, **kwargs):
+		""" Use vectorized optimization, then gridsearch, retry vectorized optimization or exit with gridsearch result"""
+		try:
+			return self.solveVector_T(**kwargs)
+		except AssertionError:
+			gridSol = self.solveGridSC_T()
+			try:
+				return self.solveVector_T(x0 = gridSol['τ_unbounded'], **{k:v for k,v in noneInit(kwargs, {}).items() if k != 'x0'})
+			except AssertionError:
+				print(f"""Warning: Could only solve with gridsearch.""")
+				return gridSol
 
 	def solveGridSC_T(self, **kwargs):
 		τ = self.interpGridSolFromSC(self.objective_T(self.db['τGrid_sτ'].values, self.precomputations_T(self.db['sGrid_sτ'].values)))

@@ -62,6 +62,9 @@ class _Base_A:
 	def hFromΘh_t(self, s_ = None, Θh = None, t = None):
 		return Θh * (s_/self.get('ν',t))**self.power_h(t)
 
+	def LOG_dlnh_Dτ(self, τ = None, t = None):
+		return -self.get('ξ',t)/((1+self.get('ξ',t)*self.get('α',t))*(1-τ))
+
 
 class BaseScalar_A(_Base_A):
 	def __init__(self, m, t = None):
@@ -70,7 +73,7 @@ class BaseScalar_A(_Base_A):
 		self.t0 = self.db['t'][0]
 
 	def __call__(self, k, t = None):
-		return self.db[f'{k}'].xs(max(noneInit(t, self.t), 0))
+		return self.db[f'{k}'].xs(max(noneInit(t, self.t), self.t0))
 
 	def get(self, k, t = None):
 		s = self(k, t = t)
@@ -114,22 +117,10 @@ class BaseScalar_A(_Base_A):
 				'∂ln(Γs)/∂τ[t+1]': dlnΓs_dτp,
 				'∂ln(h)/∂τ[t+1]': self.get('ξ',t)*Ω*(τp*dlnΓs_dτp+1)/(1+self.get('α',t)*self.get('ξ',t))}
 
-	def LOG_LaggedEEDerivatives(self, Ω = None, τp = None, Bip = None, t = None):
-		k = (self.get('αr[t+1]',t)*self.get('p',t)/self.get('κ',t)) * (self.get('θ[t+1]',t)+(1-self.get('θ[t+1]',t))*self.auxΓB2(Bip, t))
-		dlnΓs_dτp = k/(1+τp*k)
-		dlnh_dτp  = self.get('ξ',t)*Ω*(τp*dlnΓs_dτp+1)/(1+self.get('α',t)*self.get('ξ',t))
-		return {'∂ln(Γs)/∂τ[t+1]': dlnΓs_dτp, '∂ln(h)/∂τ[t+1]': dlnh_dτp, '∂ln(s)/∂τ[t+1]': ((1+self.get('ξ',t))/self.get('ξ',t))*dlnh_dτp+dlnΓs_dτp}
-
 	def EEDerivatives(self, Ψ = None, σ = None, dlnhp_dlns = None, τ = None, τp = None, t = None):
 		dlns_dτ  = -(1+self.get('ξ',t))/((1+self.get('α',t)*self.get('ξ',t))*(1-τ)*σ)
 		dlnΓs_dτ = Ψ*(dlnhp_dlns-1)*dlns_dτ
 		return {'∂ln(s)/∂τ': dlns_dτ, '∂ln(Γs)/∂τ': dlnΓs_dτ, '∂ln(h)/∂τ': self.get('ξ',t)*(dlns_dτ-dlnΓs_dτ)/(1+self.get('ξ',t))}
-
-	def LOG_EEDerivatives(self, τ = None, t = None):
-		dlns_dτ = -(1+self.get('ξ',t))/((1+self.get('α',t)*self.get('ξ',t))*(1-τ))
-		return {'∂ln(s)/∂τ' : -(1+self.get('ξ',t))/((1+self.get('α',t)*self.get('ξ',t))*(1-τ)),
-			 	'∂ln(h)/∂τ' : -self.get('ξ',t)/((1+self.get('α',t)*self.get('ξ',t))*(1-τ)),
-			 	'∂ln(Γs)/∂τ': 0}
 
 	def recursive_dlnh_dlns_(self, Ψ = None, σ = None, dlnhp_dlns = None, t = None):
 		return self.get('α',t)*self.get('ξ',t)*(1+Ψ*(1-dlnhp_dlns))/((1+self.get('α',t)*self.get('ξ',t))*σ)
@@ -151,7 +142,7 @@ class BaseScalar_A(_Base_A):
 		v1i = self.PEE1i_T(h = h, dlnh_Dτ = dlnh_Dτ, t = t)
 		v2i = self.PEE2i(τ = τBound, s_ = s_, h = h, dlnh_Dτ = dlnh_Dτ, si_s = si_s, t = t)
 		v20 = self.PEE20(τ = τBound, Θh = Θh, s_ = s_, dlnh_Dτ = dlnh_Dτ, t = t)
-		return self.aux_PEE(v1i = v1i, v10 = 0, v2i = v2i, v20 = v20, τ = τ)
+		return self.aux_PEE(v1i = v1i, v10 = 0, v2i = v2i, v20 = v20, τ = τ, t = t)
 
 	def Θh_T(self, τ = None, t = None):
 		return self.get('Γh',t)**(1/(1+self.get('ξ',t)*self.get('α',t))) * ((1-self.get('α',t))*(1-τ))**(self.get('ξ',t)/(1+self.get('α',t)*self.get('ξ',t)))
@@ -164,15 +155,16 @@ class BaseScalar_A(_Base_A):
 	def PEE1i_T(self, h = None, dlnh_Dτ = None, t = None):
 		return self.c̃1i_T(h =  h, t = t)**(1-1/self('ρ',t))*self.LOG_PEE1i_T(dlnh_Dτ=dlnh_Dτ, t = t)
 	def dlnh_Dτ_T(self, τ = None, t = None):
-		return -self.get('ξ',t)/((1+self.get('ξ',t)*self.get('α',t))*(1-τ))
+		return self.LOG_dlnh_Dτ(τ = τ, t = t)
 
 	#### LOG METHODS
-	def LOG_PEE_T(self, τBound = None, τ = None, dlnh_Dτ = None, si_s = None, t = None):
+	def LOG_PEE_T(self, τBound = None, τ = None, dlnh_Dτ = None, si_s = None, Θh = None, t = None):
 		v1i = self.LOG_PEE1i_T(dlnh_Dτ = dlnh_Dτ, t = t)
 		v2i = self.LOG_PEE2i(τ = τBound, dlnh_Dτ = dlnh_Dτ, si_s = si_s, t = t)
-		v20 = self.LOG_PEE20(τ = τBound, dlnh_Dτ = dlnh_Dτ, t = t)
-		return self.aux_PEE(v1i = v1i, v10 = 0, v2i = v2i, v20 = v20, τ = τ)
-	def LOG_PEE1i_T(self, dlnh_Dτ = None, t= None):	
+		v20 = self.LOG_PEE20(τ = τBound, dlnh_Dτ = dlnh_Dτ, Θh = Θh, t = t)
+		return self.aux_PEE(v1i = v1i, v10 = 0, v2i = v2i, v20 = v20, τ = τ, t = t)
+
+	def LOG_PEE1i_T(self, dlnh_Dτ = None, t= None):
 		return np.full(self.m.ni, dlnh_Dτ*(1+self.get('ξ',t))/self.get('ξ',t))
 
 	#######################################################################
@@ -212,20 +204,19 @@ class BaseScalar_A(_Base_A):
 	##########				4. Out of terminal state			###########
 	#######################################################################
 	def PEE_t(self, τBound = None, τ  = None, τp = None, s_ = None, s = None, h = None, Γs = None, Bip = None, si_s = None, Θh = None, Θhp = None, 
-					dlnh_Dτ = None, dlns_Dτ = None, dlnΓs_Dτ = None, dlnhp_Dlns = None, dlnhp_Dτ = None, dτp_dτ = None, t = None):
+					dlnh_Dτ = None, dlns_Dτ = None, dlnΓs_Dτ = None, dlnhp_Dlns = None, dlnΘhp_Dτ = None, dτp_dτ = None, t = None):
 		v1i = self.PEE1i_t(τp = τp, h = h, Γs = Γs, Bip = Bip, dlnh_Dτ = dlnh_Dτ, dlns_Dτ = dlns_Dτ, dlnΓs_Dτ = dlnΓs_Dτ, dlnhp_Dlns = dlnhp_Dlns, dτp_dτ = dτp_dτ, t = t)
-		v10 = self.PEE10_t(s = s, τp = τp, Θhp = Θhp, dlns_Dτ = dlns_Dτ, dτp_dτ = dτp_dτ, dlnhp_Dτ = dlnhp_Dτ, t = t)
+		v10 = self.PEE10_t(s = s, τp = τp, Θhp = Θhp, dlns_Dτ = dlns_Dτ, dτp_dτ = dτp_dτ, dlnΘhp_Dτ = dlnΘhp_Dτ, t = t)
 		v2i = self.PEE2i(τ = τBound, s_ = s_, h = h, dlnh_Dτ = dlnh_Dτ, si_s = si_s, t = t)
 		v20 = self.PEE20(τ = τBound, Θh = Θh, s_ = s_, dlnh_Dτ = dlnh_Dτ, t = t)
-		return self.aux_PEE(v1i = v1i, v10 = v10, v2i = v2i, v20 = v20, τ = τ)
+		return self.aux_PEE(v1i = v1i, v10 = v10, v2i = v2i, v20 = v20, τ = τ, t = t)
 
-	def LOG_PEE_t(self, τBound = None, τ  = None, τp = None, Γs = None, Bip = None, B0p = None, si_s = None, Θs = None,
-					dlnh_Dτ = None, dlns_Dτ = None, dlnΓs_Dτ = None, dlnhp_Dlns = None, dτp_dτ = None, t = None):
-		v1i = self.LOG_PEE1i_t(τp = τp, Γs = Γs, Bip = Bip, dlnh_Dτ = dlnh_Dτ, dlns_Dτ = dlns_Dτ, dlnΓs_Dτ = dlnΓs_Dτ, dlnhp_Dlns = dlnhp_Dlns, dτp_dτ = dτp_dτ, t = t)
-		v10 = self.LOG_PEE10_t(τp = τp, B0p = B0p, Θs = Θs, dlns_Dτ = dlns_Dτ, dlnhp_Dlns = dlnhp_Dlns, dτp_dτ = dτp_dτ, t = t)
+	def LOG_PEE_t(self, τBound = None, τ  = None, si_s = None, Θh = None, dlnh_Dτ = None, t = None):
+		v1i = self.LOG_PEE1i_t(dlnh_Dτ = dlnh_Dτ, t = t)
+		v10 = self.LOG_PEE10_t(τ = τBound, t = t)
 		v2i = self.LOG_PEE2i(τ = τBound, dlnh_Dτ = dlnh_Dτ, si_s = si_s, t = t)
-		v20 = self.LOG_PEE20(τ = τBound, dlnh_Dτ = dlnh_Dτ, t = t)
-		return self.aux_PEE(v1i = v1i, v10 = v10, v2i = v2i, v20 = v20, τ = τ)
+		v20 = self.LOG_PEE20(τ = τBound, dlnh_Dτ = dlnh_Dτ, Θh = Θh, t = t)
+		return self.aux_PEE(v1i = v1i, v10 = v10, v2i = v2i, v20 = v20, τ = τ, t =t)
 
 	# Retired formal
 	def PEE2i(self, τ = None, s_ = None, h = None, dlnh_Dτ = None, si_s = None, t = None):
@@ -246,7 +237,7 @@ class BaseScalar_A(_Base_A):
 	def c̃20(self, τ = None, Θh = None, s_ = None, t = None):
 		return self.Θc̃20(τ = τ, Θh = Θh, t = t)*(s_/self.get('ν',t))**self.power_s(t)
 	def LOG_PEE20(self, τ = None, Θh = None, dlnh_Dτ = None, t = None):
-		return ((1-self.get('α',t))*self.get('ν',t)*self.get('eps',t)*Θh**(1-self.get('α',t)) /self.get('κ[t-1]',t)) * (1+(1-self.get('α',t)*τ*dlnh_Dτ))/self.Θc̃20(τ = τ, Θh = Θh, t = t)
+		return ((1-self.get('α',t))*self.get('ν',t)*self.get('eps',t)*Θh**(1-self.get('α',t)) /self.get('κ[t-1]',t)) * (1+(1-self.get('α',t))*τ*dlnh_Dτ)/self.Θc̃20(τ = τ, Θh = Θh, t = t)
 
 	# working formal
 	def PEE1i_t(self, τp = None, h = None, Γs = None, Bip = None, dlnh_Dτ = None, dlns_Dτ = None, dlnΓs_Dτ = None, dlnhp_Dlns = None, dτp_dτ = None, t = None):
@@ -257,28 +248,22 @@ class BaseScalar_A(_Base_A):
 	def ĉ1i_t(self, τp = None, h = None, Bip = None, Γs = None, t = None):
 		return (h/self.get('Γh',t))**((1+self.get('ξ',t))/self.get('ξ',t))*(1+Bip)**(1/(self.get('ρ',t)-1)) * (self.auxProd(t)/(1+self.get('ξ',t))+Γs*self.get('αr',t)*self.get('p',t)*τp*(1-self.get('θ[t+1]',t))/self.get('κ',t))
 
-	def LOG_dlnĉ1i_dτ(self, τp = None, Γs = None, dlnh_Dτ = None, dlnΓs_Dτ = None, dτp_dτ=None, t = None):
-		k = self.get('αr',t)*self.get('p',t)*(1-self.get('θ[t+1]',t))*Γs/self.get('κ',t)
-		return dlnh_Dτ*(1+self.get('ξ',t))/self.get('ξ',t)+(k*(dτp_dτ+τp*dlnΓs_Dτ))/(self.auxProd(t)/(1+self.get('ξ',t))+(τp*k))
-	def LOG_PEE1i_t(self, τp = None, Γs = None, Bip = None, dlnh_Dτ = None, dlns_Dτ = None, dlnΓs_Dτ = None, dlnhp_Dlns = None, dτp_dτ = None, t = None):
-		return self.LOG_dlnĉ1i_dτ(τp = τp, Γs = Γs, dlnh_Dτ = dlnh_Dτ, dlnΓs_Dτ = dlnΓs_Dτ, dτp_dτ = dτp_dτ, t = t)*(1+Bip)+Bip*(1-self.get('α',t))*(dlnhp_Dlns-1)*dlns_Dτ
+	def LOG_PEE1i_t(self, dlnh_Dτ = None, t = None):
+		return ((1+self.get('ξ',t))/(self.get('ξ',t)))*dlnh_Dτ*(1+self.get('βi',t)*self.power_s(t))
 
 	# working, informal
-	def PEE10_t(self, s = None, τp = None, Θhp = None, dlns_Dτ = None, dτp_dτ = None, dlnhp_Dτ = None, t = None):
-		return self.get('β0',t)*self.c̃2p0(τp = τp, Θhp = Θhp, s = s, t = t)**(1-1/self.get('ρ',t))*self.dlnc̃2p0_dτ(τp = τp, Θhp = Θhp, dτp_dτ = dτp_dτ, dlns_Dτ = dlns_Dτ, dlnhp_Dτ=dlnhp_Dτ, t = t)
+	def PEE10_t(self, s = None, τp = None, Θhp = None, dlns_Dτ = None, dτp_dτ = None, dlnΘhp_Dτ = None, t = None):
+		return self.get('β0',t)*self.c̃2p0(τp = τp, Θhp = Θhp, s = s, t = t)**(1-1/self.get('ρ',t))*self.dlnc̃2p0_dτ(τp = τp, Θhp = Θhp, dτp_dτ = dτp_dτ, dlns_Dτ = dlns_Dτ, dlnΘhp_Dτ=dlnΘhp_Dτ, t = t)
 	def c̃2p0(self, τp = None, Θhp = None, s = None, t = None):
 		return self.c̃20(τ = τp, Θh = Θhp, s_ = s, t = noneInit(t, self.t)+1)
-	def dlnc̃2p0_dτ(self, τp = None, Θhp = None, dτp_dτ = None, dlns_Dτ = None, dlnhp_Dτ = None, t = None):
+	def dlnc̃2p0_dτ(self, τp = None, Θhp = None, dτp_dτ = None, dlns_Dτ = None, dlnΘhp_Dτ = None, t = None):
 		tp = noneInit(t, self.t)+1
-		return self.power_s(tp)*dlns_Dτ+((1-self.get('α[t+1]',t))*self.get('ν[t+1]',t)*self.get('eps[t+1]',t)*Θhp**(1-self.get('α[t+1]',t))/self.get('κ',t))*(dτp_dτ+(1-self.get('α[t+1]',t))*dlnhp_Dτ)/self.Θc̃20(τ = τp, Θh = Θhp, t = tp)
+		return self.power_s(tp)*dlns_Dτ+((1-self.get('α[t+1]',t))*self.get('ν[t+1]',t)*self.get('eps[t+1]',t)*Θhp**(1-self.get('α[t+1]',t))/self.get('κ',t))*(dτp_dτ+τp*(1-self.get('α[t+1]',t))*dlnΘhp_Dτ)/self.Θc̃20(τ = τp, Θh = Θhp, t = tp)
 	def c̃10(self, s_= None, t = None):
 		return self.auxInf0(t)*(s_/self.get('ν',t))**self.power_s(t)
 
-
-	def LOG_backOutΘs(self, B0p = None,  τp = None, t = None):
-		return B0p * self.auxInf0(t) / (self.auxInf1(t)*τp)
-	def LOG_backOutτ(self, Θs = None, Γs = None, τp = None, t = None):
-		return 1-(Θs/Γs)**((1+self.get('α',t)*self.get('ξ',t))/(1+self.get('ξ',t)))*(self.get('Γh',t)-self.get('αr',t)*(self.get('p',t)*self.get('θ[t+1]',t)*τp/self.get('κ',t))*Γs)/(self.get('Γh',t)**(1-self.get('α',t))*(1-self.get('α',t)))
+	def LOG_PEE10_t(self, τ = None, t = None):
+		return -self.get('β0',t)*self.power_s(t)**2 / (self.get('α',t)*(1-τ))
 
 	def backOutH(self, s = None, Γs = None, t = None):
 		return (s/Γs)**(self.get('ξ',t)/(1+self.get('ξ',t)))*self.get('Γh',t)
@@ -326,9 +311,8 @@ class BaseGrid_A(BaseScalar_A):
 		return ((h/self('Γh',t))**((1+self('ξ',t))/self('ξ',t)))[:,None]*self.auxProd(t)[:,None].T
 	def PEE1i_T(self, h = None, dlnh_Dτ = None, t = None):
 		return self.c̃1i_T(h =  h, t = t)**(1-1/self('ρ',t))*((1+self('ξ',t))/self('ξ',t))*dlnh_Dτ[:,None]
-	def LOG_PEE1i_T(self, dlnh_Dτ = None, t= None):	
+	def LOG_PEE1i_T(self, dlnh_Dτ = None, t= None):
 		return np.tile(dlnh_Dτ[:,None]*(1+self.get('ξ',t))/self.get('ξ',t), self.m.ni)
-
 
 	#######################################################################
 	##########				3. Steady state methods				###########
@@ -352,27 +336,30 @@ class BaseGrid_A(BaseScalar_A):
 
 
 	def ĉ1i_t(self, τp = None, h = None, Bip = None, Γs = None, t = None):
-		return ((h/self.get('Γh',t))**((1+self.get('ξ',t))/self.get('ξ',t)))[:,None]*(1+Bip)**(1/(1-self.get('ρ',t))) * ((Γs*self.get('αr',t)*self.get('p',t)*τp*(1-self.get('θ[t+1]',t))/self.get('κ',t))[:,None]+self.auxProd(t)/(1+self.get('ξ',t)))
+		return ((h/self.get('Γh',t))**((1+self.get('ξ',t))/self.get('ξ',t)))[:,None]*(1+Bip)**(1/(self.get('ρ',t)-1)) * ((Γs*self.get('αr',t)*self.get('p',t)*τp*(1-self.get('θ[t+1]',t))/self.get('κ',t))[:,None]+self.auxProd(t)/(1+self.get('ξ',t)))
 	def dlnĉ1i_dτ(self, τp = None, Γs = None, Bip = None, dlnh_Dτ = None, dlns_Dτ = None, dlnΓs_Dτ = None, dlnhp_Dlns = None, dτp_dτ = None, t = None):
 		x = (self.get('αr',t)*self.get('p',t)*(1-self.get('θ[t+1]',t))*Γs/self.get('κ',t))
 		return dlnh_Dτ[:,None]*(1+self.get('ξ',t))/self.get('ξ',t)+(Bip/(1+Bip))*(1-self.get('α',t))*((dlnhp_Dlns-1)*dlns_Dτ)[:,None]+(x*(dτp_dτ+τp*dlnΓs_Dτ))[:,None]/(self.auxProd(t)/(1+self.get('ξ',t))+(τp*x)[:,None])
 
-	def LOG_dlnĉ1i_dτ(self, τp = None, Γs = None, dlnh_Dτ = None, dlnΓs_Dτ = None, dτp_dτ=None, t = None):
-		k = self.get('αr',t)*self.get('p',t)*(1-self.get('θ[t+1]',t))*Γs/self.get('κ',t)
-		return dlnh_Dτ[:,None]*(1+self.get('ξ',t))/self.get('ξ',t)+(k*(dτp_dτ+τp*dlnΓs_Dτ))[:,None]/(self.auxProd(t)/(1+self.get('ξ',t))+(τp*k)[:,None])
-	def LOG_PEE1i_t(self, τp = None, Γs = None, Bip = None, dlnh_Dτ = None, dlns_Dτ = None, dlnΓs_Dτ = None, dlnhp_Dlns = None, dτp_dτ = None, t = None):
-		return self.LOG_dlnĉ1i_dτ(τp = τp, Γs = Γs, dlnh_Dτ = dlnh_Dτ, dlnΓs_Dτ = dlnΓs_Dτ, dτp_dτ = dτp_dτ, t = t)*(1+Bip)+Bip*(1-self.get('α',t))*((dlnhp_Dlns-1)*dlns_Dτ)[:,None]
+	def LOG_PEE1i_t(self, dlnh_Dτ = None, t = None):
+		return ((1+self.get('ξ',t))/(self.get('ξ',t)))*dlnh_Dτ[:,None]*(1+self.get('βi',t)*self.power_s(t))
 
 
-class BaseTime_A(_Base_A):
+class BaseTime_A(BaseScalar_A):
 	def __init__(self, m, ts = 'FH'):
 		super().__init__(m)
 		self.ts = ts
+
 	def __call__(self, k, t = None):
-		return self.db[k] if t is None else self.db[k].loc[t]
+		try:
+			return self.db[k] if t is None else self.db[k].loc[t]
+		except KeyError:
+			return self.db[k].loc[np.clip(t, self.t0, None)]
+
 	def get(self, k, t = None):
 		s = self(k, t = t)
 		return s.values if isinstance(s, (pd.Series, pd.DataFrame)) else s
+
 
 	#######################################################################
 	##########					0. Aux methods				 	###########
@@ -380,13 +367,16 @@ class BaseTime_A(_Base_A):
 	def Γh(self, t = None):
 		return (self('γi',t) * self.auxProd(t)).sum(axis=1)
 	def auxΓB1(self, Bi, t = None):
-		return ((self('γi',t) * self.auxProd(t)).values * (Bi/(1+Bi))).sum(axis=1)
+		return ((self('γi',t) * self.auxProd(t)).values * (Bi/(1+Bi))).sum(axis=-1)
 	def auxΓB2(self, Bi, t = None):
-		return (self.get('γi',t) * (1/(1+Bi))).sum(axis=1)
+		return (self.get('γi',t) * (1/(1+Bi))).sum(axis=-1)
 	def auxΓB3(self, Bi, t = None):
-		return ((self('γi',t) * self.auxProd(t)).values * (Bi/(1+Bi)**2)).sum(axis=1)
+		return ((self('γi',t) * self.auxProd(t)).values * (Bi/(1+Bi)**2)).sum(axis=-1)
 	def auxΓB4(self, Bi, t = None):
-		return (self.get('γi',t)*Bi/(1+Bi)**2).sum(axis=1)
+		return (self.get('γi',t)*Bi/(1+Bi)**2).sum(axis=-1)
+
+	def aux_PEE(self, v1i = None, v10 = None, v2i = None, v20 = None, τ = None, t = None):
+		return self.interiorFOC( (v2i*self.get('γi[t-1]',t)*self.ω2i(t)).sum(axis=-1)+v20*self.get('γ0[t-1]',t)*self.ω20(t)+self.get('ν',t)*((v1i * self.get('γi',t)*self.ω1i(t)).sum(axis=-1)+v10*self.get('γ0',t)*self.ω10(t)), τ)
 
 	#######################################################################
 	##########					1. Simple defs				 	###########
@@ -404,7 +394,20 @@ class BaseTime_A(_Base_A):
 		return self.get('Γh',t)**(1/(1+self.get('ξ',t)*self.get('α',t))) * ((1-self.get('α',t))*(1-τ))**(self.get('ξ',t)/(1+self.get('α',t)*self.get('ξ',t)))
 	def h_T(self, s_ = None, τ = None, t = None):
 		return self.Θh_T(τ = τ, t = t)*(s_/self.get('ν',t))**self.power_h(t)
-	
+
+	def LOG_PEE1i_T(self, dlnh_Dτ = None, t = None):
+		return np.tile((dlnh_Dτ * (1+self.get('ξ',t))/self.get('ξ',t))[:,None], self.m.ni)
+
+	#######################################################################
+	##########				3. Out of terminal state		 	###########
+	#######################################################################
+	def aux_c2i_coeff(self, t = None):
+		return (self.get('αr',t)*self.get('p[t-1]',t)/self.get('κ[t-1]',t))[:,None]*(1+self.get('θ',t)[:,None]*(self.auxProd(t)/self.get('Γh[t-1]',t)[:,None]-1))
+	def LOG_PEE2i(self, τ = None, dlnh_Dτ = None, si_s = None, t = None):
+		return ((1-self.get('α',t))*dlnh_Dτ)[:,None]+self.aux_c2i_coeff(t)/(si_s+self.aux_c2i_coeff(t)*τ[:,None])
+	def LOG_PEE1i_t(self, dlnh_Dτ = None, t = None):
+		return (1+self.get('βi',t)*self.power_s(t)[:,None]) * ((1+self.get('ξ',t))*dlnh_Dτ/self.get('ξ',t))[:,None]
+
 
 	#######################################################################
 	##########				4. Finite horizon methods			###########
@@ -423,8 +426,10 @@ class BaseTime_A(_Base_A):
 		return h/((s_/self('ν'))**self.power_h())
 
 	#### LOG METHODS:
-	def FH_LOG_Γs(self, τ = None, τp = None):
-		return self.Γs(Bi = self.get('βi', t = self.db['txE']), τp = τp[:-1], t = self.db['txE'])
+	def FH_LOG_ΓsLagged(self, τ = None):
+		return self.Γs(Bi = self.get('βi[t-1]'), τp = τ)
+	def FH_LOG_Γs(self, τp = None):
+		return self.Γs(Bi = self.get('βi[t-1]',self.db['txE']), τp = τp[:-1], t = self.db['txE'])
 	@property
 	def FH_LOG_Θh(self):
 		return self.FH_Θh
@@ -438,3 +443,74 @@ class BaseTime_A(_Base_A):
 		return s
 	def FH_LOG_h(self, Θh = None, s_ = None):
 		return Θh * (s_/self.get('ν'))**self.power_h()
+
+	def FH_LOG_PEE(self, τBound = None, τ = None, si_s = None, Θh = None, dlnh_Dτ = None):
+		return np.hstack([self.LOG_PEE_t(τBound = τBound[:-1], τ = τ[:-1], si_s = si_s[:-1], Θh = Θh[:-1], dlnh_Dτ = dlnh_Dτ[:-1], t = self.db['txE']),
+						  self.LOG_PEE_T(τBound = τBound[-1:], τ = τ[-1:], si_s = si_s[-1:], Θh = Θh[-1:], dlnh_Dτ = dlnh_Dτ[-1:], t = self.db['t'][-1:])])
+
+class BaseTimeGrid_A(BaseTime_A):
+	""" Primarily (currently only) used for the LOG model. First dim = time, second dim = grid, third dim = "j"-index """
+	def auxΓB1(self, Bi, t = None):
+		return ((self.get('γi',t) * self.auxProd(t))[:,None,:] * (Bi/(1+Bi))).sum(axis=-1)
+	def auxΓB2(self, Bi, t = None):
+		return (self.get('γi',t)[:,None,:] * (1/(1+Bi))).sum(axis=-1)
+	def auxΓB3(self, Bi, t = None):
+		return ((self.get('γi',t) * self.auxProd(t))[:,None,:] * (Bi/(1+Bi)**2)).sum(axis=-1)
+	def auxΓB4(self, Bi, t = None):
+		return (self.get('γi',t)[:,None,:]*Bi/(1+Bi)**2).sum(axis=-1)
+	def Γs(self, Bi = None, τp = None, t = None):
+		return (1/(1+self.get('ξ',t)))[:,None] * self.auxΓB1(Bi, t = t) / (1+(self.get('αr',t)*self.get('p',t)/self.get('κ',t))[:,None]*τp*(self.get('θ[t+1]',t)[:,None]+self.auxΓB2(Bi, t = t)*(1-self.get('θ[t+1]',t)[:,None])))
+
+	def aux_PEE(self, v1i = None, v10 = None, v2i = None, v20 = None, τ = None, t = None):
+		return self.interiorFOC( (v2i*(self.get('γi[t-1]',t)*self.ω2i(t))[:,None,:]).sum(axis=-1)+v20*(self.get('γ0[t-1]',t)*self.ω20(t))[:,None]+self.get('ν',t)[:,None]*((v1i * (self.get('γi',t)*self.ω1i(t))[:,None,:]).sum(axis=-1)+v10*(self.get('γ0',t)*self.ω10(t))[:,None]), τ)
+
+	#######################################################################
+	##########					1. Simple defs				 	###########
+	#######################################################################
+	def Θh_t(self, τ = None, τp = None, Γs = None, t = None):
+		return (self.get('Γh',t)**((1+self.get('ξ',t))/(1+self.get('α',t)*self.get('ξ',t))))[:,None] * ((1-self.get('α',t)[:,None])*(1-τ)/(self.get('Γh',t)[:,None]-self.auxForm1(t)[:,None]*τp*Γs))**((self.get('ξ',t)/(1+self.get('α',t)*self.get('ξ',t)))[:,None])
+	def si_s(self, Bi = None, Γs = None, τp = None, t = None):
+		return Bi*self.auxProd(t)[:,None,:]/((1+Bi)*(1+self.get('ξ',t))[:,None,None]*Γs[:,:,None])-((self.get('αr',t)*self.get('p',t)/self.get('κ',t))[:,None]*τp)[:,:,None]*((1-self.get('θ[t+1]',t))[:,None,None]/(1+Bi)+(self.get('θ[t+1]',t)/self.get('Γh',t))[:,None,None]*self.auxProd(t)[:,None,:])
+
+	#######################################################################
+	##########				2. Terminal state (FH)			 	###########
+	#######################################################################
+	def LOG_PEE1i_T(self, dlnh_Dτ = None, t = None):
+		return np.tile((dlnh_Dτ * (1+self.get('ξ',t))/self.get('ξ',t)[:,None])[:,:,None], self.m.ni)
+
+	#######################################################################
+	##########				3. Out of terminal state			 ##########
+	#######################################################################
+	def aux_c2i_coeff(self, t = None):
+		return (self.get('αr',t)*self.get('p[t-1]',t)/self.get('κ[t-1]',t))[:,None,None]*(1+self.get('θ',t)[:,None,None]*(self.auxProd(t)[:,None,:]/self.get('Γh[t-1]',t)[:,None,None]-1))
+
+	def LOG_PEE2i(self, τ = None, dlnh_Dτ = None, si_s = None, t = None):
+		return ((1-self.get('α',t)[:,None])*dlnh_Dτ)[:,:,None]+self.aux_c2i_coeff(t)/(si_s+self.aux_c2i_coeff(t)*τ[:,:,None])
+
+	def Θc̃20(self, τ = None, Θh = None, t = None):
+		return (self.get('χ[t-1]',t)**(1+self.get('ξ[t-1]',t))*self.auxInf0(noneInit(t,self.t)-1))[:,None]+((1-self.get('α',t))*self.get('ν',t)*self.get('eps',t)/self.get('κ[t-1]',t))[:,None] * τ * Θh**(1-self.get('α',t)[:,None])
+	def LOG_PEE20(self, τ = None, Θh = None, dlnh_Dτ = None, t = None):
+		return ((1-self.get('α',t))*self.get('ν',t)*self.get('eps',t)/self.get('κ[t-1]',t))[:,None] * Θh**(1-self.get('α',t)[:,None]) * (1+(1-self.get('α',t))[:,None]*τ*dlnh_Dτ)/self.Θc̃20(τ = τ, Θh = Θh, t = t)
+
+	def LOG_PEE1i_t(self, dlnh_Dτ = None, t = None):
+		return (1+self.get('βi',t)[:,None,:]*self.power_s(t)[:,None,None]) * ((1+self.get('ξ',t))/self.get('ξ',t))[:,None,None] * dlnh_Dτ[:,:,None]
+
+	def LOG_PEE10_t(self, τ = None, t = None):
+		return -(self.get('β0',t)*self.power_s(t)**2 / self.get('α',t))[:,None]/(1-τ)
+
+	#######################################################################
+	##########						LOG METHODS				 	###########
+	#######################################################################
+	def LOG_dlnh_Dτ(self, τ = None, t = None):
+		return -(self.get('ξ',t)/(1+self.get('ξ',t)*self.get('α',t)))[:,None]/(1-τ)
+
+	def FH_LOG_ΓsLagged(self, τ = None):
+		return self.Γs(Bi = self.get('βi[t-1]')[:,None,:], τp = τ)
+	def FH_LOG_Θh(self, τ = None, τp = None, Γs = None):
+		return np.vstack([self.Θh_t(τ = τ[:-1], τp = τp[:-1], Γs = Γs, t = self.db['txE']), self.Θh_T(τ = τ[-1], t = self.db['t'][-1])[None,:]])
+	def FH_LOG_si_s(self, τp = None, Γs = None):
+		return self.si_s(Bi = self.get('βi',t =self.db['txE'])[:,None,:], Γs = Γs, τp = τp[:-1], t = self.db['txE'])
+
+	def FH_LOG_PEE(self, τBound = None, τ = None, si_s = None, Θh = None, dlnh_Dτ = None):
+		return np.vstack([self.LOG_PEE_t(τBound = τBound[:-1], τ = τ[:-1], si_s = si_s[:-1], Θh = Θh[:-1], dlnh_Dτ = dlnh_Dτ[:-1], t = self.db['txE']),
+						  self.LOG_PEE_T(τBound = τBound[-1:], τ = τ[-1:], si_s = si_s[-1:], Θh = Θh[-1:], dlnh_Dτ = dlnh_Dτ[-1:], t = self.db['t'][-1:])])

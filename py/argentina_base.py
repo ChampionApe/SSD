@@ -478,7 +478,7 @@ class BaseTime(_Base):
 		return h/((s_/self('ν'))**self.power_h())
 
 	#### LOG METHODS:
-	def FH_LOG_Γs(self, τ = None, τp = None):
+	def FH_LOG_Γs(self, τp = None):
 		return self.Γs(Bi = self.get('βi', t = self.db['txE']), τp = τp[:-1], t = self.db['txE'])
 	@property
 	def FH_LOG_Θh(self):

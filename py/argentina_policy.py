@@ -36,7 +36,7 @@ def defaultGrid(k, db):
 	return defaultGrid_(db[f'{k}_n'], db[f'{k}_l'], db[f'{k}_u'], db[f'k{k}_l'], db[f'k{k}_u'])
 
 class LOG:
-	def __init__(self, m):
+	def __init__(self, m, kwargsMain = None):
 		self.m = m
 		self.BG = m.BG # requires gridded solutions
 		self.B = m.B
@@ -47,8 +47,18 @@ class LOG:
 		self.kwargs_t = {'style': 'Vector', 'method': 'hybr', 'options': None, 'x0_from_solp': True}
 		self.fInterp = customLinInterp
 		self.kwargsInterp = {}
+		self.kwargsMain = self.defaultKwargs | noneInit(kwargsMain, {})
+		self.main = m.main # what method is used in __call__ method.
 		# self.fInterp = interpolate.PchipInterpolator
 		# self.kwargsInterp = {'extrapolate': True}
+
+	def __call__(self, main = None):
+		method = noneInit(main, self.main)
+		return getattr(self, f'f_{method}')()
+
+	@property
+	def defaultKwargs(self):
+		return {'FH': dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.db['t'][-2]: self.kwargs_T_, self.db['t'][-1]: self.kwargs_T}}
 
 	@property
 	def defaultInitials(self):
@@ -58,9 +68,9 @@ class LOG:
 	def FH_kwargs(self):
 		return dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.db['t'][-2]: self.kwargs_T_, self.db['t'][-1]: self.kwargs_T}
 
-	def FH(self, pars = None, update = True):
+	def f_FH(self, update = True, **kwargs):
 		""" Return dict of policy functions. If kwargs are passed, this should be a dict of kwargs for each t. """
-		kwargs = noneInit(pars, self.FH_kwargs)
+		kwargs = self.kwargsMain['FH'] | noneInit(kwargs, {})
 		sols = dict.fromkeys(self.db['t'])
 		t = self.db['t'][-1]
 		self.BG.t = t
@@ -169,7 +179,7 @@ class LOG:
 		return {'dτ/d(s0/s)': np.gradient(sol['τ'], sol['s0/s[t-1]'],edge_order =2)}
 
 class PEE:
-	def __init__(self, m):
+	def __init__(self, m,  kwargsMain = None):
 		self.m = m
 		self.BG = m.BG # requires gridded solutions
 		self.B = m.B
@@ -180,6 +190,16 @@ class PEE:
 		self.kwargs_t =  {'style': 'Vector', 'method': 'krylov', 'options': {'maxiter': 100}, 'x0_from_solp': True}
 		self.fInterp = interpolate.RegularGridInterpolator
 		self.kwargsInterp = {'method': 'quintic', 'bounds_error': False, 'fill_value': None}
+		self.kwargsMain = self.defaultKwargs | noneInit(kwargsMain, {})
+		self.main = m.main # what method is used in __call__ method.
+
+	def __call__(self, main = None):
+		method = noneInit(main, self.main)
+		return getattr(self, f'f_{method}')()
+
+	@property
+	def defaultKwargs(self):
+		return {'FH': dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.db['t'][-2]: self.kwargs_T_, self.db['t'][-1]: self.kwargs_T}}
 
 	def interpInitialsFromSols(self, sols, idx, grids):
 		queryCurrentGrid = np.vstack([self.db['sGrid_ss0'].values, self.db['s0Grid_ss0'].values]).T
@@ -201,9 +221,9 @@ class PEE:
 	def FH_kwargs(self):
 		return dict.fromkeys(self.db['t'][:-2], self.kwargs_t) | {self.db['t'][-2]: self.kwargs_T_, self.db['t'][-1]: self.kwargs_T}
 
-	def FH(self, pars = None, update = True):
+	def f_FH(self, update = True, **kwargs):
 		""" Return dict of policy functions. If kwargs are passed, this should be a dict of kwargs for each t. """
-		kwargs = noneInit(pars, self.FH_kwargs)
+		kwargs = self.kwargsMain['FH'] | noneInit(kwargs, {})
 		sols = dict.fromkeys(self.db['t'])
 		t = self.db['t'][-1]
 		self.BG.t = t
@@ -231,17 +251,6 @@ class PEE:
 		kwargs = self.kwargsInterp | noneInit(kwargs, {})
 		interps = tuple(self.fInterp(grids, vi, **kwargs) for vi in ite)
 		return lambda x: np.vstack([interps_i(x) for interps_i in interps]).T
-
-	# def gridPolicy1d(self, v, idx, grids, kwargs = None):
-	# 	vals = pd.Series(v, index = idx).unstack('s0Idx').values
-	# 	kwargs = self.kwargsInterp | noneInit(kwargs, {})
-	# 	return lambda x: interpolate.interpn(grids, vals, x, **kwargs)
-
-	# def gridPolicy2d(self, v, idx, grids, kwargs = None):
-	# 	""" Repeat and stack columns """
-	# 	ite = tuple(pd.Series(v[:,i], index = idx).unstack('s0Idx').values for i in range(v.shape[1])) 
-	# 	kwargs = self.kwargsInterp | noneInit(kwargs, {})
-	# 	return lambda x: np.vstack([interpolate.interpn(grids, vi, x, **kwargs) for vi in ite]).T
 
 	def vectorPolicy(self, sols, y = 'τ', idx = None, grids = None, kwargs = None):
 		""" Return vector of predicted policies from vector of states; the "0" index is used to make sure that it returns a 1d object, but it requires that we query a single point at a time. """

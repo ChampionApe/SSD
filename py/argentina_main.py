@@ -4,7 +4,7 @@ from scipy import optimize
 from copy import deepcopy
 from argentina_base import BaseScalar, BaseGrid, BaseTime
 from argentina_policy import PEE, LOG, inverseInterp1d, cartesianGrids
-from argentinaAnalytical_base import BaseScalar_A, BaseGrid_A, BaseTime_A
+from argentinaAnalytical_base import BaseScalar_A, BaseGrid_A, BaseTime_A, BaseTimeGrid_A
 from argentinaAnalytical_policy import PEE_A, LOG_A
 
 def noneInit(x, fallBackValue):
@@ -30,10 +30,11 @@ def interpFixedPoint(ŝ, s):
 	return ŝ1+((ŝ2-ŝ1)*(ŝ1-s1))/(s2-s1-(ŝ2-ŝ1)) # lin. approximation
 
 class Model:
-	def __init__(self, nj = 4, T = 10, ngrid = 50, ns0 = 10, pars = None, gridkwargs = None):
+	def __init__(self, main = 'FH', nj = 4, T = 10, ngrid = 50, ns0 = 10, pars = None, gridkwargs = None):
 		""" Fixed namespace """
 		self.nj, self.T = nj, T
 		self.ni = self.nj-1
+		self.main = main
 		self.db = {}
 		self.parTypes = self._parTypes.copy()
 		self.initIdxs() # add relevnat pandas indices to database
@@ -55,14 +56,34 @@ class Model:
 			return self.ns[ns].getShift(symbol, lead, opt = noneInit(opt, {'useLoc':'nn'}))
 		elif isinstance(symbol, pd.DataFrame):
 			return self.ns[ns].getShift(symbol.stack(), lead, opt = noneInit(opt, {'useLoc': 'nn'})).unstack()
-		else:
-			return pd.Series(symbol).shift(lead, fill_value=symbol[-1]).values
+		elif isinstance(symbol, np.ndarray):
+			if symbol.ndim == 1:
+				return np.hstack([symbol[1:], symbol[-1]])
+			elif symbol.ndim == 2:
+				return np.vstack([symbol[1:], symbol[-1]])
 
 	def __call__(self, x, name, ns = 'exo', **kwargs):
 		return self.ns[ns](x, name, **kwargs)
 
 	def get(self, x, name, ns = 'exo'):
 		return self.ns[ns].get(x, name)
+
+	#######################################################################
+	##########				0. Convenience functions			###########
+	#######################################################################
+	def solvePEE(self, main = None, **EEkwargs):
+		""" Solve for PEE """
+		policy = self.LOG(main = main) if self.db['ρ'].iloc[0] == 1 else self.PEE(main = main)
+		paths  = self.solveEE(policy, main = main, **EEkwargs)
+		return paths, policy
+
+	def solveEE(self, policy, main = None, **kwargs):
+		main = noneInit(main, self.main)
+		if isinstance(policy, (np.ndarray, pd.Series)):
+			eefunction = getattr(self, f'EE_{main}_LOG_solve') if self.db['ρ'].iloc[0] == 1 else getattr(self, f'EE_{main}_solve')
+		else:
+			eefunction = getattr(self, f'EE_{main}_PEE_LOG_solve') if self.db['ρ'].iloc[0] == 1 else getattr(self, f'EE_{main}_PEE_solveRobust')
+		return eefunction(policy, **kwargs)
 
 	#######################################################################
 	##########					1. INIT METHODS				 	###########
@@ -363,10 +384,12 @@ class Model:
 	#######################################################################
 	##########				4. Economic Equilibrium 			###########
 	#######################################################################
-	def EE_FH_solve(self, τ, s0, x0 = None, update = True):
+	def EE_FH_solve(self, τ, z0 = None, x0 = None, update = True):
+		if s0 is None:
+			s0 = self.SS_Scalar_solve(τ[0], t = self.db['t'][0])['s']
 		τp = self.leadSym(τ)
-		sol = optimize.root(lambda x: self.EE_FH_objective(x, τ, τp, s0), noneInit(x0, self.x0['EE_FH']))
-		assert sol['success'], f""" Could not identify economic equilibrium (self.EE_FH_solve) with parameter inputs: 
+		sol = optimize.root(lambda x: self.EE_FH_objective(x, τ, τp, z0), noneInit(x0, self.x0['EE_FH']))
+		assert sol['success'], f""" Could not identify economic equilibrium (self.EE_FH_CRRA_solve) with parameter inputs: 
 		τ: {τ}, s0: {s0}"""
 		if update:
 			self.x0['EE_FH'] = sol['x']
@@ -388,26 +411,12 @@ class Model:
 		d['τ'] = pd.Series(τ, index = self.db['t'])
 		return d
 
-	# With LOG policy functions:
-	def EE_FH_LOG_solve(self, gridSol, z0 = None, x0 = None, update = True):
-		policyFunction = self.LOG.vectorPolicy(gridSol)
-		if z0 is None:
-			ss = self.steadyStateLOG(self.LOG.gridPolicy(gridSol[self.db['t'][0]]['τ']), t = self.db['t'][0])
-			z0 = [ss['s'], ss['s0/s']]
-			if x0 is None:
-				x0 = np.full(self.T, ss['τ'])
-		sol = optimize.root(lambda x: self.EE_FH_LOG_objective(x, policyFunction, z0), noneInit(x0, self.x0['EE_FH_LOG']))
-		assert sol['success'], f""" Couldn't identify economic equilibrium"""
-		if update:
-			self.x0['EE_FH_LOG'] = sol['x']
-		return self.EE_FH_LOG_report(sol['x'], policyFunction, z0)
-
-	def EE_FH_LOG_objective(self, τ, policyFunction, z0):
-		return policyFunction(self.LOG_EE_FH(τ, s0 = z0[0], s0_s = z0[1])['s0/s[t-1]'])-τ
-
-	def LOG_EE_FH(self, τ, s0 = None, s0_s = None):
+	# LOG specification:
+	def EE_FH_LOG_solve(self, τ, s0 = None, s0_s = None):
+		if s0 is None:
+			s0 = self.LOG_SS_Scalar(τ[0], t = self.db['t'][0])['s']
 		sol = {'τ': τ, 'τ[t+1]': self.leadSym(τ)}
-		sol['Γs'] = self.BT.FH_LOG_Γs(τ = sol['τ'], τp = sol['τ[t+1]'])
+		sol['Γs'] = self.BT.FH_LOG_Γs(τp = sol['τ[t+1]'])
 		sol['Θh'] = self.BT.FH_LOG_Θh(τ = sol['τ'], τp = sol['τ[t+1]'], Γs = sol['Γs'])
 		sol['Θs'] = self.BT.FH_LOG_Θs(Θh = sol['Θh'], Γs = sol['Γs'])
 		sol['s']  = self.BT.FH_LOG_s(Θs = sol['Θs'], s0 = s0)
@@ -417,11 +426,28 @@ class Model:
 		sol['s0/s[t-1]'] = np.insert(sol['s0/s'], 0, s0_s)
 		return sol
 
-	def EE_FH_LOG_report(self, x, policyFunction, z0):
-		d = self.LOG_EE_FH(x, s0 = z0[0], s0_s = z0[1])
+	def EE_FH_LOG_report(self, x, z0):
+		d = self.EE_FH_LOG_solve(x, s0 = z0[0], s0_s = z0[1])
 		[d.__setitem__(k, pd.Series(d[k], index = self.db['t'])) for k in ('τ','τ[t+1]','Θh','s[t-1]','h','s0/s[t-1]')];
 		[d.__setitem__(k, pd.Series(d[k], index = self.db['txE'])) for k in ('Γs','Θs','s','s0/s')];
 		return d
+
+	# With LOG policy functions:
+	def EE_FH_PEE_LOG_solve(self, gridSol, z0 = None, x0 = None, update = True):
+		policyFunction = self.LOG.vectorPolicy(gridSol)
+		if z0 is None:
+			ss = self.steadyStateLOG(self.LOG.gridPolicy(gridSol[self.db['t'][0]]['τ']), t = self.db['t'][0])
+			z0 = [ss['s'], ss['s0/s']]
+			if x0 is None:
+				x0 = np.full(self.T, ss['τ'])
+		sol = optimize.root(lambda x: self.EE_FH_PEE_LOG_objective(x, policyFunction, z0), noneInit(x0, self.x0['EE_FH_LOG']))
+		assert sol['success'], f""" Couldn't identify economic equilibrium"""
+		if update:
+			self.x0['EE_FH_LOG'] = sol['x']
+		return self.EE_FH_LOG_report(sol['x'], z0)
+
+	def EE_FH_PEE_LOG_objective(self, τ, policyFunction, z0):
+		return policyFunction(self.EE_FH_LOG_solve(τ, s0 = z0[0], s0_s = z0[1])['s0/s[t-1]'])-τ
 
 	# With PEE policy functions:
 	def EE_FH_PEE_solveRobust(self, gridSol, z0 = None, τ0 = None, update = True):
@@ -491,7 +517,7 @@ class Model:
 		""" Temporarily create smaller grids to get a rough solution - add to self.PEE.x0 """
 		ngrid_0, ns0_0 = self.ngrid, self.ns0
 		self.updateSolGrids(ngrid, ns0, **kwargs)
-		sols = self.PEE.FH(**kwargs)
+		sols = self.PEE()
 		idx, grids = self.db['ss0Idx'], (self.db['sGrid'], self.db['s0Grid'])
 		# revert grids
 		self.updateSolGrids(ngrid_0, ns0_0)
@@ -511,8 +537,7 @@ class Model:
 
 	def calibLOG_objective(self, x, update = True):
 		self.calibUpdateParameters(x)
-		sol = self.LOG.FH()
-		path = self.EE_FH_LOG_solve(sol)
+		path, sol = self.solvePEE()
 		η0 = self.B.calib_η0(τ = path['τ'].xs(self.db['t0']), Θh = path['Θh'].xs(self.db['t0']))
 		return np.hstack([path['τ'].xs(self.db['t0'])-self.db['τ0'],
 						  self.B.calib_savingsRate(s_ = path['s[t-1]'].xs(self.db['t0']), s = path['s'].xs(self.db['t0']), h = path['h'].xs(self.db['t0']))-self.db['s0'],
@@ -539,8 +564,7 @@ class Model:
 	def calibPEE_objective(self, x, update = True):
 		""" Search for β, ω that results in desired savings rate + PEE tax rate. """
 		self.calibUpdateParameters(x)
-		sol = self.PEE.FH()
-		PEE = self.EE_FH_PEE_solveRobust(sol, update = update)
+		PEE, sol = self.solvePEE()
 		η0 = self.B.calib_η0(τ = PEE['τ'].xs(self.db['t0']), Θh = PEE['Θh'].xs(self.db['t0']))
 		return np.hstack([PEE['τ'].xs(self.db['t0'])-self.db['τ0'],
 						 self.B.calib_savingsRate(s_ = PEE['s[t-1]'].xs(self.db['t0']), s = PEE['s'].xs(self.db['t0']), h = PEE['h'].xs(self.db['t0']))-self.db['s0'],
@@ -548,10 +572,11 @@ class Model:
 						  self.B.calib_X0(η0 = η0, Θh = PEE['Θh'].xs(self.db['t0']))-x[3]])
 
 class Model_A(Model):
-	def __init__(self, nj = 4, T = 10, ngrid = 50, pars = None, gridkwargs = None):
+	def __init__(self, main = 'FH', nj = 4, T = 10, ngrid = 50, pars = None, gridkwargs = None):
 		""" Fixed namespace """
 		self.nj, self.T = nj, T
 		self.ni = self.nj-1
+		self.main = main
 		self.db = {}
 		self.parTypes = self._parTypes.copy()
 		self.initIdxs() # add relevnat pandas indices to database
@@ -560,12 +585,39 @@ class Model_A(Model):
 		self.B = BaseScalar_A(self)
 		self.BG = BaseGrid_A(self)
 		self.BT = BaseTime_A(self)
+		self.BTG = BaseTimeGrid_A(self)
 		self.initPars(pars = pars) # add parameters and targets
 		self.initArgentina()
 		self.updateAuxPars()
 		self.initGrids(ngrid, **noneInit(gridkwargs, {}))
 		self.PEE = PEE_A(self)
 		self.LOG = LOG_A(self)
+
+	#######################################################################
+	##########				0. Convenience functions			###########
+	#######################################################################
+	def solvePEE(self, main = None, **EEkwargs):
+		""" Solve for PEE """
+		if self.db['ρ'].iloc[0] == 1:
+			policy = self.LOG(main = main)
+			paths  = self.solveEE(policy['τ'], main = main, **EEkwargs)
+		else:
+			policy = self.PEE(main = main)
+			paths  = self.solveEE(policy, main = main, **EEkwargs)
+		return paths, policy
+
+	def solveEE(self, policy, main = None, **kwargs):
+		main = noneInit(main, self.main)
+		if isinstance(policy, (np.ndarray, pd.Series)):
+			eefunction = getattr(self, f'EE_{main}_LOG_solve') if self.db['ρ'].iloc[0] == 1 else getattr(self, f'EE_{main}_solve')
+		else:
+			eefunction = getattr(self, f'EE_{main}_PEE_LOG_solve') if self.db['ρ'].iloc[0] == 1 else getattr(self, f'EE_{main}_PEE_solve')
+		return eefunction(policy, **kwargs)
+
+
+	#######################################################################
+	##########					1. INIT METHODS					###########
+	#######################################################################
 
 	def addNamespaces(self):
 		self.ns = {}
@@ -662,8 +714,53 @@ class Model_A(Model):
 		d['Θs'] = self.BT.FH_BackOutΘs(s_ = d['s[t-1]'], s = d['s'])
 		return d
 
+	### Approximate PEE solution from grid
+	def EE_FH_PEE_approx(self, gridSol, z0 = None, τ0 = None, idx = None, **kwargs):
+		syms = list(self.ns['EE_FH'].symbols)
+		idx = noneInit(idx, syms.index('s'))
+		sol = dict.fromkeys(self.db['t'])
+		sol[self.db['t'][0]], z0 = self.EE_FH_PEE_approx_t0(gridSol[self.db['t'][0]], z0 = z0, τ0 = τ0, **kwargs)
+		[sol.__setitem__(t, self.EE_FH_PEE_approx_tx0(gridSol[t], self.getZ0(sol[t-1], idx = idx), t), **kwargs) for t in self.db['t'][1:]]
+		return self.approxStackVector(sol), z0
+
+	def EE_FH_PEE_approx_t0(self, gridSol0, z0 = None, τ0 = None, **kwargs):
+		if z0 is None:
+			ss = self.steadyStatePEE(self.PEE.gridPolicy(gridSol0['τ'], **kwargs), τ0 = τ0, t = self.db['t'][0])
+			z0 = ss['s']
+		return np.array([self.PEE.gridPolicy(gridSol0[k], **kwargs)(z0) for k in self.ns['EE_FH'].symbols]), z0
+	def getZ0(self, sol_, idx = 1):
+		return sol_[idx]
+	def EE_FH_PEE_approx_tx0(self, gridSolt, z0, t, **kwargs):
+		return np.array([self.PEE.gridPolicy(gridSolt[k], **kwargs)(z0) for k in self.ns['EE_FH'].symbols])
+	def approxStackVector(self, sol):
+		""" This selecst the right elements corresponding to the solution vector in problem EE_FH_PEE. """
+		arr = np.hstack(list(sol.values())).T
+		return np.hstack([arr[:,0], arr[:-1,1], arr[1:,2]])
+
+	# LOG METHODS
+	def EE_FH_LOG_solve(self, τ, s0 = None, **kwargs):
+		""" This is basically just a reporting function - no numerical problem to resolve """
+		if s0 is None:
+			s0 = self.LOG_SS_Scalar(τ[0], t = self.db['t'][0])['s']
+		sol = {'τ': τ, 'τ[t+1]': self.leadSym(τ)}
+		sol['Γs'] = self.BT.FH_LOG_Γs(τp = sol['τ[t+1]'])
+		sol['Θh'] = self.BT.FH_LOG_Θh(τ = sol['τ'], τp = sol['τ[t+1]'], Γs = sol['Γs'])
+		sol['Θs'] = self.BT.FH_LOG_Θs(Θh = sol['Θh'], Γs = sol['Γs'])
+		sol['s']  = self.BT.FH_LOG_s(Θs = sol['Θs'], s0 = s0)
+		sol['s[t-1]'] = np.insert(sol['s'], 0, s0)
+		sol['h']  = self.BT.FH_LOG_h(Θh = sol['Θh'], s_ = sol['s[t-1]'])
+		[sol.__setitem__(k, pd.Series(sol[k], index = self.db['t'])) for k in ('τ','τ[t+1]','Θh','s[t-1]','h')];
+		[sol.__setitem__(k, pd.Series(sol[k], index = self.db['txE'])) for k in ('Γs','Θs','s')];
+		return sol
+
 	#######################################################################
 	##########				6. Calibration methods	 			###########
 	#######################################################################
-
-	
+	def calibLOG_objective(self, x, update = True):
+		self.calibUpdateParameters(x)
+		path = self.EE_FH_LOG_solve(self.LOG.solve(update = update)['τ'])
+		η0 = self.B.calib_η0(τ = path['τ'].xs(self.db['t0']), Θh = path['Θh'].xs(self.db['t0']))
+		return np.hstack([path['τ'].xs(self.db['t0'])-self.db['τ0'],
+						  self.B.calib_savingsRate(s_ = path['s[t-1]'].xs(self.db['t0']), s = path['s'].xs(self.db['t0']), h = path['h'].xs(self.db['t0']))-self.db['s0'],
+						  η0-x[2],
+						  self.B.calib_X0(η0 = η0, Θh = path['Θh'].xs(self.db['t0']))-x[3]])
