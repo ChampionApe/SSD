@@ -87,7 +87,7 @@ def calibrateOnGrid_simpleBreak(m, grid, parameter, cals_x0 = None, sols_x0 = No
 		cals[v], paths[v], sols[v] = calibrateBasicIte(m, parameter, v, cals_x0 = cals_x0, sols_x0 = sols_x0)
 		if not isinstance(cals[v], np.ndarray):
 			break
-		print v
+		print(v)
 	return cals, paths, sols
 
 def calibrateBasicIte(m, k, v, cals_x0 = None, sols_x0 = None):

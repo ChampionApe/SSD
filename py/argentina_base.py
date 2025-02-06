@@ -28,6 +28,8 @@ class _Base:
 		return self.power_s(t)**2
 	def auxProd(self, t = None):
 		return (self('ηi', t).pow(1+self('ξ',t), axis = 0)/self('Xi',t).pow(self('ξ',t), axis = 0)).values
+	def auxProd_(self, t = None):
+		return (self('ηi[t-1]',t).pow(1+self('ξ[t-1]',t), axis = 0)/self('Xi[t-1]',t).pow(self('ξ[t-1]',t), axis = 0)).values
 	def auxProd0(self, t = None):
 		return self.get('η0', t)**(1+self.get('ξ',t))/self.get('X0',t)**self.get('ξ',t)
 
@@ -35,6 +37,8 @@ class _Base:
 		return self.auxProd0(t)*((1-self.get('α',t))/self.get('Γh',t)**(self.get('α',t)))**((1+self.get('ξ',t))/(1+self.get('ξ',t)*self.get('α',t)))/(1+self.get('ξ',t))
 	def auxInf1(self, t = None):
 		return (self.get('αr[t+1]',t)/self.get('α0[t+1]',t))*self.get('p0',t)*self.get('eps[t+1]',t)/self.get('κ',t)
+	def auxInf1_(self, t = None):
+		return (self.get('αr',t)/self.get('α0',t))*self.get('p0[t-1]',t)*self.get('eps',t)/self.get('κ[t-1]',t)
 	def auxForm1(self, t = None):
 		return self.get('αr',t)*self.get('p',t)*self.get('θ[t+1]',t)/self.get('κ',t)
 
@@ -207,8 +211,8 @@ class BaseScalar(_Base):
 		return np.full(self.m.ni, dlnh_Dτ*(1+self.get('ξ',t))/self.get('ξ',t))
 
 	#######################################################################
-	##########				3. Steady state methods				###########
-	#######################################################################
+	##########				3. Steady state methods				########### 
+	####################################################################### 
 	def steadyStateEq_Bi(self, Bi, Γs, τ, t = None):
 		if self.get('ρ',t)<1:
 			return self.get('βi',t)**(self.get('ρ',t)/(1-self.get('ρ',t))) * (1-self.get('α',t))*(1-τ)-Bi**(1/(1-self.get('ρ',t)))*(self.get('ν',t)/self.get('p',t))*(self.get('α',t)*self.get('Γh',t)-(1-self.get('α',t))*self.get('p',t)*self.get('θ',t)*τ*Γs/self.get('κ',t))/Γs
@@ -438,6 +442,10 @@ class BaseTime(_Base):
 	def auxΓB4(self, Bi, t = None):
 		return (self.get('γi',t)*Bi/(1+Bi)**2).sum(axis=1)
 
+	def felicityFuncPd(self, x, t = None):
+		""" Assumes x = pandas object with time in rows """
+		return np.log(x) if self.db['ρ'].iloc[0] == 1 else x.pow(1-1/self('ρ',t),axis=0).div(1-1/self('ρ',t),axis=0)
+
 	#######################################################################
 	##########					1. Simple defs				 	###########
 	#######################################################################
@@ -457,7 +465,39 @@ class BaseTime(_Base):
 		return self.get('Γh',t)**(1/(1+self.get('ξ',t)*self.get('α',t))) * ((1-self.get('α',t))*(1-τ))**(self.get('ξ',t)/(1+self.get('α',t)*self.get('ξ',t)))
 	def h_T(self, s_ = None, τ = None, t = None):
 		return self.Θh_T(τ = τ, t = t)*(s_/self.get('ν',t))**self.power_h(t)
-	
+	def Θc̃1i_T(self, Θh = None, t = None):
+		return ((Θh/self.get('Γh',t))**((1+self.get('ξ',t))/self.get('ξ',t))/(1+self.get('ξ',t)))[:,None] * self.auxProd(t)
+	def Θc̃10_T(self, t = None):
+		return self.auxInf0(t)
+	def util1i_T(self, c̃1i = None, Δy1i = 0, t = None):
+		return self.felicityFuncPd(c̃1i+Δy1i, t = t)
+	def util10_T(self, c̃10 = None, Δy10 = 0, t = None):
+		return self.felicityFuncPd(c̃10+Δy10, t = t)
+
+	#######################################################################
+	##########				3. Non-terminal state f			 	###########
+	#######################################################################
+	def Θc̃1i_t(self, Θh = None, Γs = None, Bip = None, τp = None, t = None):
+		return ((Θh/self.get('Γh',t))**((1+self.get('ξ',t))/self.get('ξ',t)))[:,None]*(self.auxProd(t)/(1+self.get('ξ',t)[:,None])+(Γs*self.get('αr',t)* self.get('p',t)*τp*(1-self.get('θ[t+1]',t))/self.get('κ',t))[:,None])/(1+Bip)
+	def Θc2i(self, τ = None, Θh = None, si_s = None, t = None):
+		return (self.get('α',t)*self.get('ν',t)*Θh**(1-self.get('α',t))/self.get('p[t-1]',t))[:,None] * (si_s + (self.get('αr',t)*self.get('p[t-1]',t)*τ/self.get('κ[t-1]',t))[:,None]*(1+self.get('θ',t)[:,None]*(self.auxProd_(t)/self.get('Γh[t-1]',t)[:,None]-1)))
+	def Θc2pi_t(self, τp = None, Θhp = None, Θs = None, si_s = None, t = None):
+		return ((Θs/self.get('ν[t+1]',t))**self.power_s(t)*self.get('α[t+1]',t)*self.get('ν[t+1]',t)*Θhp**(1-self.get('α[t+1]',t))/self.get('p',t))[:,None] * (si_s+(self.get('αr[t+1]',t)*self.get('p',t)*τp/self.get('κ',t))[:,None]*(1+self.get('θ[t+1]',t)[:,None]*(self.auxProd(t)/self.get('Γh',t)[:,None]-1)))
+	def Θc̃10_t(self, B0p = None, τp = None, t = None):
+		return (self.auxInf0(t)+self.auxInf1(t)*τp)/(1+B0p)
+	def Θc20(self, τ = None, Θh = None, s0_s = None, t = None):
+		return (self.get('α',t)*self.get('α0',t)*self.get('ν',t)/self.get('p0[t-1]',t))*Θh**(1-self.get('α',t))*(s0_s+self.auxInf1_(t)*τ)
+	def Θc2p0(self, τp = None, Θhp = None, Θs = None, s0_s = None, t = None):
+		return ((Θs/self.get('ν[t+1]',t))**self.power_s(t)*self.get('α[t+1]',t)*self.get('α0[t+1]',t)*self.get('ν[t+1]',t)/self.get('p0',t))*Θhp**(1-self.get('α[t+1]',t))*(s0_s+self.auxInf1(t)*τp)
+
+	def util1i_t(self, c̃1i = None, c2pi = None, Δy1i = 0, Δo1i = 0, t = None):
+		return self.felicityFuncPd(c̃1i+Δy1i, t = t)+self.get('βi',t)*self.felicityFuncPd(c2pi+Δo1i, t = t)
+	def util10_t(self, c̃10 = None, c2p0 = None, Δy10 = 0, Δo10 = 0, t = None):
+		return self.felicityFuncPd(c̃10+Δy10, t = t)+self.get('β0',t)*self.felicityFuncPd(c2p0+Δo10, t = t)
+	def util2i(self, c2i = None, Δo2i = 0, t = None):
+		return self.felicityFuncPd(c2i+Δo2i, t = t)
+	def util20(self, c20 = None, Δo20 = 0, t = None):
+		return self.felicityFuncPd(c20+Δo20, t = t)
 
 	#######################################################################
 	##########				4. Finite horizon methods			###########
@@ -476,6 +516,73 @@ class BaseTime(_Base):
 		return self.s0_s(B0 = self.B0(s_ = s, h = hp, t = self.db['txE']), Θs = self.FH_BackOutΘs(s_ = s_, s = s), τp = τp[:-1], t = self.db['txE'])
 	def FH_BackOutΘh(self, s_ = None, h = None):
 		return h/((s_/self('ν'))**self.power_h())
+
+	# Coefficient methods - relies on dictionary of solution structure, returns pandas objects
+	def FH_Θc̃1i(self, sd):
+		return pd.DataFrame(np.vstack([self.Θc̃1i_t(Θh = sd['Θh'].values[:-1], Γs = sd['Γs'].values, Bip = sd['Bi'].values[1:,], τp = sd['τ[t+1]'].values[:-1], t = self.db['txE']), 
+									   self.Θc̃1i_T(Θh = sd['Θh'].values[-1:], t = self.db['t'][-1:])]), index = self.db['t'], columns = self.db['i'])
+	def FH_Θc2i(self, sd):
+		return pd.DataFrame(self.Θc2i(τ = sd['τ'].values, Θh = sd['Θh'].values, si_s = sd['si/s[t-1]'].values), index = self.db['t'], columns = self.db['i'])
+	def FH_Θhi(self, sd):
+		return pd.DataFrame((self.get('ηi')/self.get('Xi'))**(self.get('ξ')[:,None]) / self.get('Γh')[:,None], index = self.db['t'], columns = self.db['i'])
+	def FH_Θc2pi(self, sd):
+		return pd.DataFrame(self.Θc2pi_t(τp = sd['τ'].values[1:], Θhp = sd['Θh'].values[1:], Θs = sd['Θs'].values, si_s = sd['si/s[t-1]'].values[1:], t = self.db['txE']), index = self.db['txE'], columns = self.db['i'])
+	def FH_Θc̃10(self, sd):
+		return pd.Series(np.hstack([self.Θc̃10_t(B0p = sd['B0'].values[1:], τp = sd['τ'].values[1:], t = self.db['txE']),
+									self.Θc̃10_T(t = self.db['t'][-1:])]), index = self.db['t'])
+	def FH_Θc20(self, sd):
+		return pd.Series(self.Θc20(τ = sd['τ'].values, Θh = sd['Θh'].values, s0_s = sd['s0/s[t-1]'].values), index = self.db['t'])
+	def FH_Θc2p0(self, sd):
+		return pd.Series(self.Θc2p0(τp = sd['τ'].values[1:], Θhp = sd['Θh'].values[1:], Θs = sd['Θs'].values, s0_s = sd['s0/s[t-1]'].values[1:], t = self.db['txE']), index = self.db['txE'])
+	# Reporting methods for "levels" - relies on dictionary solution structure, return pandas objects
+	def FH_hi_h(self, sd):
+		return pd.DataFrame(self.auxProd()/self.get('Γh')[:,None], index = self.db['t'], columns = self.db['i'])
+	def FH_c̃1i(self, sd):
+		return sd['Θc̃1i'].mul((sd['s[t-1]']/self.get('ν'))**self.power_s(),axis=0)
+	def FH_c2i(self, sd):
+		return sd['Θc2i'].mul((sd['s[t-1]']/self.get('ν'))**self.power_s(), axis = 0)
+	def FH_c2pi(self, sd):
+		return sd['Θc2pi'].mul((sd['s[t-1]'].iloc[:-1]/self.get('ν', t = self.db['txE']))**self.power_p(t = self.db['txE']), axis = 0)
+	def FH_c̃10(self, sd):
+		return sd['Θc̃10']*((sd['s[t-1]']/self.get('ν'))**self.power_s())
+	def FH_c20(self, sd):
+		return sd['Θc20']*((sd['s[t-1]']/self.get('ν'))**self.power_s())
+	def FH_c2p0(self, sd):
+		return sd['Θc2p0']*((sd['s[t-1]'].iloc[:-1]/self.get('ν',t=self.db['txE']))**self.power_p(t = self.db['txE']))
+
+	# Reporting methods for utility
+	def FH_util1i_(self, sd, Δy1i = None, Δo1i = None):
+		Δy1i, Δo1i = noneInit(Δy1i, np.zeros((len(self.db['t']), self.m.ni))), noneInit(Δo1i, np.zeros((len(self.db['t']), self.m.ni)))
+		return pd.concat([self.util1i_t(c̃1i = sd['c̃1i'].iloc[:-1], c2pi = sd['c2pi'], Δy1i = Δy1i[:-1], Δo1i = Δo1i[:-1], t = self.db['txE']),
+						  self.util1i_T(c̃1i = sd['c̃1i'].iloc[-1:], Δy1i = Δy1i[-1:], t = self.db['t'][-1:])], axis = 0)
+	def FH_util1i(self, sd, Δ1i = None, **kwargs):
+		Δ1i = noneInit(Δ1i, np.zeros((len(self.db['t']), self.m.ni)))
+		Bip = self.m.leadSym(sd['Bi'].values)
+		return self.FH_util1i_(sd, Δy1i = Δ1i /(1+Bip), Δo1i  = Δ1i * self.m.leadSym(sd['R'].values/self.get('p[t-1]'))[:,None]*Bip/(1+Bip))
+
+	def FH_util2i(self, sd, Δ2i = None, **kwargs):
+		Δ2i = noneInit(Δ2i, np.zeros((len(self.db['t']), self.m.ni)))
+		return self.util2i(c2i = sd['c2i'], Δo2i = Δ2i)
+	def FH_util10_(self, sd, Δy10 = None, Δo10 = None):
+		Δy10, Δo10 = noneInit(Δy10, np.zeros(len(self.db['t']))), noneInit(Δo10, np.zeros(len(self.db['t'])))
+		return pd.concat([self.util10_t(c̃10 = sd['c̃10'].iloc[:-1], c2p0 = sd['c2p0'], Δy10 = Δy10[:-1], Δo10 = Δo10[:-1], t = self.db['txE']),
+						  self.util10_T(c̃10 = sd['c̃10'].iloc[-1:], Δy10 = Δy10[-1:], t = self.db['t'][-1:])], axis = 0)
+	def FH_util10(self, sd, Δ10 = None, **kwargs):
+		Δ10 = noneInit(Δ10, np.zeros(len(self.db['t'])))
+		B0p = self.m.leadSym(sd['B0'].values)
+		return self.FH_util10_(sd, Δy10 = Δ10 /(1+B0p), Δo10  = Δ10 * self.m.leadSym(sd['R'].values/self.get('p0[t-1]'))*B0p/(1+B0p))
+
+	def FH_util20(self, sd, Δ20 = 0, **kwargs):
+		Δ20 = noneInit(Δ20, np.zeros(len(self.db['t'])))
+		return self.util20(c20 = sd['c20'], Δo20 = Δ20)
+	def FH_utilPol_(self, sd, Δy1i = None, Δo1i = None, Δy10 = None, Δo10 = None, Δo2i = None, Δo20 = None):
+		return (self('ν')*((self.FH_util1i(sd, Δy1i = Δy1i, Δo1i = Δo1i) * self.ω1i() * self('γi')).sum(axis=1)+self.FH_util10(sd, Δy10 = Δy10, Δo10 = Δo10))
+						  +(self.FH_util2i(sd, Δo2i = Δo2i) * self.ω2i()).sum(axis=1) + self.FH_util20(sd, Δo20 = Δo20))
+	def FH_utilPol(self, sd, ΔPol = None, **kwargs):
+		ΔPol = noneInit(ΔPol, np.zeros(len(self.db['t'])))
+		return (self('ν')*((self.FH_util1i(sd, Δ1i = ΔPol[:,None]) * self.ω1i() * self('γi')).sum(axis=1)+self.FH_util10(sd, Δ10 = ΔPol))
+						  +(self.FH_util2i(sd, Δ2i = ΔPol[:,None]) * self.ω2i()).sum(axis=1) + self.FH_util20(sd, Δ20 = ΔPol))
+
 
 	#### LOG METHODS:
 	def FH_LOG_Γs(self, τp = None):

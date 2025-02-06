@@ -100,7 +100,7 @@ class Model:
 		[baseIns.__setattr__('t0', mt0.db['t'][0]) for baseIns in (mt0.B, mt0.BG, mt0.BT)];
 		mt0.PEE.x0 = {t: self.PEE.x0[t] for t in mt0.db['t']}
 		mt0.LOG.x0 = {t: self.LOG.x0[t] for t in mt0.db['t']}
-		for ns in ('EE_FH','EE_IH','EE_FH_PEE','EE_FH_LOG'):
+		for ns in ('EE_FH','EE_IH','EE_FH_PEE','EE_FH_LOG','EV'):
 			mt0.x0[ns] = np.hstack([adj.rc_pd(self.ns[ns].get(self.x0[ns],k), mt0.db['t']) for k in self.ns[ns].symbols])
 		return mt0
 
@@ -166,9 +166,8 @@ class Model:
 									   dict.fromkeys(self.aux1DParams, self.db['t']) |
 									   dict.fromkeys(self.aux2DParams, self.db['ti']) |
 									   dict.fromkeys(self.paramsFromFuncs, self.db['t'])))
+		self.ns['EV'] = sm(symbols = {f'Δ{k}i':  pd.MultiIndex.from_product([self.db['t'], self.db['i']]) for k in ('1','2')} |{f'Δ{k}0': self.db['t'] for k in ('1','2')} |{'ΔPol': self.db['t']})
 		[ns.compile() for ns in self.ns.values()];
-		self.ns['EE_FH'].addLaggedSym('h[t+1]','h',-1, c= ('not',self.db['t'][-1:]))
-		self.ns['EE_FH_PEE'].addLaggedSym('h[t+1]','h',-1, c= ('not',self.db['t'][-1:]))
 		
 	def initPars(self, pars = None):
 		self.db.update(self.defaultParameters) # default parameters and targets
@@ -276,7 +275,8 @@ class Model:
 				'EE_IH': np.full(self.ns['EE_IH'].len, .2),
 				'EE_FH_PEE': np.full(self.ns['EE_FH_PEE'].len, .2),
 				'EE_FH_LOG': np.full(self.T, .2),
-				'SS_Scalar': np.full(self.ni+1, .2)}
+				'SS_Scalar': np.full(self.ni+1, .2),
+				'EV': np.zeros(self.ns['EV'].len)}
 
 	def initArgentina(self):
 		""" Apply simple calibration methods + adhoc adjustments relevant for specific Argentina model version """
@@ -396,6 +396,7 @@ class Model:
 		return self.EE_FH_report(sol, s0, τ)
 
 	def EE_FH_objective(self, x, τ, τp, s0):
+		""" Γs, s are both defined over txE. """
 		Γs, h, s, s_ = self(x, 'Γs',ns = 'EE_FH'), self(x, 'h',ns='EE_FH'), self(x,'s',ns='EE_FH'), self.FH_sLag(x, s0)
 		return np.hstack([self.BT.FH_h(s_ = s_, τ = τ, τp = τp, Γs = Γs)-h,
 						  self.BT.FH_s(h = h, Γs = Γs)-s,
@@ -571,6 +572,63 @@ class Model:
 						  η0-x[2],
 						  self.B.calib_X0(η0 = η0, Θh = PEE['Θh'].xs(self.db['t0']))-x[3]])
 
+
+	#######################################################################
+	##########			7. Extended reporting modules	 		###########
+	#######################################################################
+	def FH_reportAll(self, path):
+		path['Bi'] = pd.DataFrame(self.BT.Bi(s_ = path['s[t-1]'].values, h = path['h'].values), index = self.db['t'], columns = self.db['i'])
+		path['B0'] = pd.Series(self.BT.B0(s_ = path['s[t-1]'].values, h = path['h'].values), index = self.db['t'])
+		path['R']  = pd.Series(self.BT.R(s_ = path['s[t-1]'].values, h = path['h'].values), index = self.db['t'])
+		path['τ[t+1]'] = self.leadSym(path['τ'])
+		path['Γs[t-1]'] = pd.Series(np.insert(path['Γs'].values, 0, self.B.Γs(Bi = path['Bi'].values[0], τp = path['τ'].values[0], t = self.db['t'][0])), index = self.db['t'])
+		path['si/s[t-1]'] = pd.DataFrame(self.BT.si_s(Bi = path['Bi'].values, Γs = path['Γs[t-1]'].values, τp = path['τ'].values), index = self.db['t'], columns = self.db['i'])
+		self.FH_reportCoefficients(path)
+		self.FH_reportLevels(path)
+		self.FH_reportUtils(path)
+		return path
+
+	def FH_LOG_reportAll(self, path):
+		path['Bi'] = pd.DataFrame(self.BT.get('βi'), index = self.db['t'], columns = self.db['i'])
+		path['B0'] = pd.Series(self.BT.get('β0'), index = self.db['t'])
+		path['R']  = pd.Series(self.BT.R(s_ = path['s[t-1]'].values, h = path['h'].values), index = self.db['t'])
+		path['τ[t+1]'] = self.leadSym(path['τ'])
+		path['Γs[t-1]'] = pd.Series(np.insert(path['Γs'].values, 0, self.B.Γs(Bi = path['Bi'].values[0], τp = path['τ'].values[0], t = self.db['t'][0])), index = self.db['t'])
+		path['si/s[t-1]'] = pd.DataFrame(self.BT.si_s(Bi = path['Bi'].values, Γs = path['Γs[t-1]'].values, τp = path['τ'].values), index = self.db['t'], columns = self.db['i'])
+		self.FH_reportCoefficients(path)
+		self.FH_reportLevels(path)
+		self.FH_reportUtils(path)
+		return path
+
+	def FH_reportCoefficients(self, path):
+		""" Return dictionary of solution"""
+		[path.__setitem__(k, getattr(self.BT, f'FH_{k}')(path)) for k in ('Θhi','Θc̃1i','Θc2i', 'Θc2pi', 'Θc̃10','Θc20','Θc2p0')];
+		return path
+	def FH_reportLevels(self, path):
+		""" Assumes self.FH_reportCoefficients has been run"""
+		[path.__setitem__(k, getattr(self.BT, f'FH_{k}')(path)) for k in ('hi_h','c̃1i','c2i','c2pi','c̃10','c20','c2p0')];
+	def FH_reportUtils(self, path):
+		""" Assumes self.FH_reportLevels has been run"""
+		[path.__setitem__(k, getattr(self.BT, f'FH_{k}')(path)) for k in ('util1i','util10','util2i','util20', 'utilPol')];
+
+	#######################################################################
+	##########					8. EV methods		 			###########
+	#######################################################################
+	def EV_FH_solve(self, baseline, newSol, x0 = None, **kwargs):
+		sol = optimize.root(lambda x: self.EV_FH_objective(x, baseline, newSol), noneInit(x0, np.zeros(self.ns['EV'].len)), **kwargs)
+		assert sol['success'], f""" Couldn't resolve EV """
+		return self.EV_FH_report(sol['x'])
+
+	def EV_FH_report(self, x):
+		return self.ns['EV'].unloadSol(x)
+
+	def EV_FH_objective(self, x, baseline, newsol):
+		syms = {'Δ1i': self.get(x, 'Δ1i', ns = 'EV').unstack('j').values, 
+				'Δ2i': self.get(x, 'Δ2i', ns = 'EV').unstack('j').values,
+				'Δ10': self(x, 'Δ10', ns = 'EV'), 'Δ20': self(x, 'Δ20', ns = 'EV'), 'ΔPol': self(x, 'ΔPol', ns = 'EV')}
+		utils = {k: getattr(self.BT, f'FH_{k}')(newsol, **syms) for k in ('util1i','util10','util2i','util20','utilPol')}
+		return np.hstack([(utils[k]-baseline[k]).values.reshape(-1) for k in utils])
+
 class Model_A(Model):
 	def __init__(self, main = 'FH', nj = 4, T = 10, ngrid = 50, pars = None, gridkwargs = None):
 		""" Fixed namespace """
@@ -629,7 +687,7 @@ class Model_A(Model):
 									   dict.fromkeys(self.aux2DParams, self.db['ti']) |
 									   dict.fromkeys(self.paramsFromFuncs, self.db['t'])))
 		[ns.compile() for ns in self.ns.values()];
-		self.ns['EE_FH'].addLaggedSym('h[t+1]','h',-1, c= ('not',self.db['t'][-1:]))
+		# self.ns['EE_FH'].addLaggedSym('h[t+1]','h',-1, c= ('not',self.db['t'][-1:]))
 
 	@property
 	def defaultInitials(self):
