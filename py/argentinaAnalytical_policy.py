@@ -1,7 +1,7 @@
 import numpy as np, pandas as pd
 from scipy import optimize, interpolate
-from auxFunctions import customLinInterp
-from pyDbs import is_iterable, adj
+from auxFunctions import CustomLinInterp
+from pyDbs import is_iterable
 import warnings
 warnings.simplefilter(action = "ignore", category = FutureWarning)
 # warnings.filterwarnings("ignore", message = "FutureWarning: The previous implementation of stack is deprecated and will be removed in a future version of pandas. See the What's New notes for pandas 2.1.0 for details. Specify future_stack=True to adopt the new implementation and silence this warning.")
@@ -175,7 +175,7 @@ class PEE_A:
 		self.kwargs_T = {'style': 'Vector', 'method': 'krylov', 'options': None}
 		self.kwargs_T_ = {'style': 'Vector', 'method': 'krylov', 'options': None, 'x0_from_solp': False}
 		self.kwargs_t = {'style': 'Vector', 'method': 'krylov', 'options': None, 'x0_from_solp': True}
-		self.fInterp = customLinInterp
+		self.fInterp = CustomLinInterp
 		self.kwargsInterp = {}
 		self.kwargsMain = self.defaultKwargs | noneInit(kwargsMain, {})
 		self.main = m.main # what method is used in __call__ method.

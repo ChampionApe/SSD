@@ -1,7 +1,7 @@
 import numpy as np, pandas as pd
 from scipy import optimize, interpolate
-from auxFunctions import customLinInterp
-from pyDbs import is_iterable, adj
+from auxFunctions import CustomLinInterp
+from pyDbs import is_iterable
 import warnings
 warnings.simplefilter(action = "ignore", category = FutureWarning)
 # warnings.filterwarnings("ignore", message = "FutureWarning: The previous implementation of stack is deprecated and will be removed in a future version of pandas. See the What's New notes for pandas 2.1.0 for details. Specify future_stack=True to adopt the new implementation and silence this warning.")
@@ -45,7 +45,7 @@ class LOG:
 		self.kwargs_T = {'style': 'Vector', 'method': 'hybr', 'options': None}
 		self.kwargs_T_ = {'style': 'Vector', 'method': 'hybr', 'options': None, 'x0_from_solp': False}
 		self.kwargs_t = {'style': 'Vector', 'method': 'hybr', 'options': None, 'x0_from_solp': True}
-		self.fInterp = customLinInterp
+		self.fInterp = CustomLinInterp
 		self.kwargsInterp = {}
 		self.kwargsMain = self.defaultKwargs | noneInit(kwargsMain, {})
 		self.main = m.main # what method is used in __call__ method.
@@ -275,7 +275,7 @@ class PEE:
 		fp = {k: self.gridPolicy(solp[k]) for k in ('τ','Bi','B0', '∂ln(h)/∂τ', '∂ln(h)/∂ln(s[t-1])', 'dτ/ds[t-1]','dτ/d(s0/s)','dln(h)/dln(s[t-1])')}
 		sol = self.precomputations_t(solp)
 		x = np.empty((self.m.ns0, self.m.ngrid), dtype = object)
-		x0, x0solp = x0.reshape(3, self.m.nss0grid).T, solp['x_unbounded'].reshape(3, self.m.nss0grid).T
+		x0 = x0.reshape(3, self.m.nss0grid).T
 		x[0,0] = optimize.root(lambda x: self.objectiveScalarLoop_t(x, aux_soli(sol,0),fp), x0 = x0[0], method = method, options = options)
 		for i in range(1,self.m.nss0grid):
 			soli = aux_soli(sol,i)

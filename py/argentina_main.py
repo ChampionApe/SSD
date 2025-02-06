@@ -1,9 +1,9 @@
 import numpy as np, pandas as pd, scipy, functools
-from pyDbs import is_iterable, SymMaps as sm, adj
+from pyDbs import SymMaps as sm, adj
 from scipy import optimize
 from copy import deepcopy
 from argentina_base import BaseScalar, BaseGrid, BaseTime
-from argentina_policy import PEE, LOG, inverseInterp1d, cartesianGrids
+from argentina_policy import PEE, LOG, cartesianGrids
 from argentinaAnalytical_base import BaseScalar_A, BaseGrid_A, BaseTime_A, BaseTimeGrid_A
 from argentinaAnalytical_policy import PEE_A, LOG_A
 
@@ -384,11 +384,11 @@ class Model:
 	#######################################################################
 	##########				4. Economic Equilibrium 			###########
 	#######################################################################
-	def EE_FH_solve(self, τ, z0 = None, x0 = None, update = True):
+	def EE_FH_solve(self, τ, s0 = None, x0 = None, update = True):
 		if s0 is None:
 			s0 = self.SS_Scalar_solve(τ[0], t = self.db['t'][0])['s']
 		τp = self.leadSym(τ)
-		sol = optimize.root(lambda x: self.EE_FH_objective(x, τ, τp, z0), noneInit(x0, self.x0['EE_FH']))
+		sol = optimize.root(lambda x: self.EE_FH_objective(x, τ, τp, s0), noneInit(x0, self.x0['EE_FH']))
 		assert sol['success'], f""" Could not identify economic equilibrium (self.EE_FH_CRRA_solve) with parameter inputs: 
 		τ: {τ}, s0: {s0}"""
 		if update:
